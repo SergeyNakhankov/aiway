@@ -1,12 +1,9 @@
 #!/usr/bin/env bash
 # ============================================================================
 #  aiway — transparent AI-service proxy installer
-#  Sets up Angie (nginx fork) as SNI proxy + Blocky DNS on a VPS so that
-#  AI services (ChatGPT, Claude, Gemini, Copilot, …) are accessible without
-#  a VPN by routing their DNS responses to this server.
 #
-#  Based on: https://habr.com/ru/articles/982070/ by crims0n
-#  Usage:    sudo bash install.sh
+#  Based on https://habr.com/ru/articles/982070/ by crims0n
+#  Usage: sudo bash install.sh
 # ============================================================================
 set -euo pipefail
 
@@ -21,7 +18,35 @@ ANGIE_HTTP_DIR="/etc/angie/http.d"
 BLOCKY_DIR="/opt/blocky"
 BLOCKY_CONFIG="${BLOCKY_DIR}/config.yml"
 
-# ── ASCII banner ─────────────────────────────────────────────────────────────
+# ── Globals populated by gather_inputs ───────────────────────────────────────
+VPS_IP=""
+DOT_DOMAIN=""
+ACME_EMAIL=""
+
+# ── Cleanup trap — rolls back on unexpected failure ───────────────────────────
+_INSTALL_SUCCESS=false
+
+cleanup_on_error() {
+    [[ "$_INSTALL_SUCCESS" == "true" ]] && return
+    echo ""
+    echo -e "${RED}${BOLD}  Installation failed — rolling back changes...${RESET}"
+
+    # Stop Blocky if it was started
+    docker rm -f blocky 2>/dev/null || true
+
+    # Restore systemd-resolved if we touched it
+    local conf="/etc/systemd/resolved.conf"
+    if [[ -f "${conf}.aiway.bak" ]]; then
+        cp "${conf}.aiway.bak" "$conf"
+        systemctl restart systemd-resolved 2>/dev/null || true
+        print_info "systemd-resolved restored from backup"
+    fi
+
+    echo -e "  ${DIM}Fix the error above and re-run: sudo bash install.sh${RESET}\n"
+}
+trap cleanup_on_error EXIT
+
+# ── Banner ───────────────────────────────────────────────────────────────────
 print_banner() {
     echo -e "${CYAN}${BOLD}"
     cat <<'EOF'
@@ -30,7 +55,7 @@ print_banner() {
   / /_\ | \ \ /\ / / _` | | | |
  / /  | | |\ V  V / (_| | |_| |
  \/   |_|_| \_/\_/ \__,_|\__, |
-                          |___/
+                           |___/
 
   Transparent AI proxy — VPS edition
 EOF
@@ -39,18 +64,18 @@ EOF
     echo -e "  ${DIM}Angie (nginx fork) + Blocky DNS + optional DoT/DoH${RESET}\n"
 }
 
-# ── Preflight ────────────────────────────────────────────────────────────────
+# ── Preflight ─────────────────────────────────────────────────────────────────
 preflight() {
     print_step "Preflight checks"
     check_root
     detect_os
 
-    # Confirm with user
     echo -e "\n  ${YELLOW}This installer will:${RESET}"
     echo -e "   • Install ${BOLD}Angie${RESET} (nginx fork) as SNI proxy on port 443"
     echo -e "   • Install ${BOLD}Blocky${RESET} (Docker) as DNS server on port 53"
-    echo -e "   • Redirect ${BOLD}${#AI_APEX_DOMAINS[@]} AI domains${RESET} through this server"
-    echo -e "   • Modify ${BOLD}/etc/systemd/resolved.conf${RESET} (disable stub resolver)\n"
+    echo -e "   • Redirect ${BOLD}${#AI_APEX_DOMAINS[@]} AI service domains${RESET} through this server"
+    echo -e "   • Modify ${BOLD}/etc/systemd/resolved.conf${RESET} (backed up first)"
+    echo -e "   • Stop conflicting DNS services (dnsmasq, bind9) if found\n"
 
     read -rp "  Continue? [y/N] " confirm
     [[ "${confirm,,}" == "y" ]] || { echo "Aborted."; exit 0; }
@@ -60,10 +85,15 @@ preflight() {
 gather_inputs() {
     print_step "Configuration"
 
-    # VPS public IP
+    # --- VPS public IP (try 3 sources, strip whitespace) ---
     local detected_ip=""
-    detected_ip=$(curl -sf --max-time 5 https://api.ipify.org 2>/dev/null || \
-                  curl -sf --max-time 5 https://ifconfig.me 2>/dev/null || true)
+    detected_ip=$(
+        curl -sf --max-time 5 https://api.ipify.org      2>/dev/null ||
+        curl -sf --max-time 5 https://ifconfig.me        2>/dev/null ||
+        curl -sf --max-time 5 https://icanhazip.com      2>/dev/null ||
+        true
+    )
+    detected_ip="${detected_ip//[[:space:]]/}"
 
     echo ""
     if [[ -n "$detected_ip" ]]; then
@@ -72,57 +102,71 @@ gather_inputs() {
         VPS_IP="${VPS_IP:-$detected_ip}"
     else
         read -rp "  VPS public IP: " VPS_IP
-        while [[ -z "$VPS_IP" ]]; do
-            print_error "IP address is required."
-            read -rp "  VPS public IP: " VPS_IP
-        done
     fi
 
-    # Validate IP format
-    if ! [[ "$VPS_IP" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-        print_error "Invalid IP address: $VPS_IP"
-        exit 1
-    fi
+    # Validate — loop until valid
+    while ! [[ "$VPS_IP" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; do
+        print_error "Invalid IP: ${VPS_IP:-<empty>}"
+        read -rp "  VPS public IP: " VPS_IP
+    done
     print_ok "VPS IP: ${VPS_IP}"
 
-    # Optional domain for DoT / DoH / ACME
+    # --- Optional domain for DoT / DoH ---
     echo ""
-    echo -e "  ${DIM}Optional: a domain pointing to this server enables:${RESET}"
-    echo -e "  ${DIM}  • HTTPS for the DoH endpoint  (e.g. https://dns.example.com/dns-query)${RESET}"
-    echo -e "  ${DIM}  • TLS certificate via ACME for DNS-over-TLS (port 853)${RESET}"
-    echo -e "  ${DIM}Leave blank to skip (DoT/DoH will be unavailable).${RESET}\n"
+    echo -e "  ${DIM}Optional: a domain pointing to this server enables DoT (port 853) and DoH.${RESET}"
+    echo -e "  ${DIM}Without a domain, plain DNS on port 53 still works on all devices.${RESET}\n"
     read -rp "  Domain for DoT/DoH (blank to skip): " DOT_DOMAIN
     DOT_DOMAIN="${DOT_DOMAIN:-}"
+    DOT_DOMAIN="${DOT_DOMAIN#https://}"; DOT_DOMAIN="${DOT_DOMAIN#http://}"; DOT_DOMAIN="${DOT_DOMAIN%/}"
 
     if [[ -n "$DOT_DOMAIN" ]]; then
-        # Strip protocol/trailing slash if user pasted a URL
-        DOT_DOMAIN="${DOT_DOMAIN#https://}"
-        DOT_DOMAIN="${DOT_DOMAIN#http://}"
-        DOT_DOMAIN="${DOT_DOMAIN%/}"
         print_ok "DoT/DoH domain: ${DOT_DOMAIN}"
-
-        read -rp "  Email for ACME / Let's Encrypt: " ACME_EMAIL
+        read -rp "  Email for Let's Encrypt: " ACME_EMAIL
         while [[ -z "$ACME_EMAIL" ]]; do
-            print_error "Email is required for ACME."
-            read -rp "  Email for ACME / Let's Encrypt: " ACME_EMAIL
+            print_error "Email required for ACME certificate."
+            read -rp "  Email for Let's Encrypt: " ACME_EMAIL
         done
         print_ok "ACME email: ${ACME_EMAIL}"
     else
-        print_warn "No domain provided — skipping DoT/DoH configuration."
+        print_warn "No domain — skipping DoT/DoH."
         ACME_EMAIL=""
     fi
+}
+
+# ── Free up port 53 ───────────────────────────────────────────────────────────
+free_port_53() {
+    print_step "Checking port 53"
+
+    # Stop dnsmasq
+    if systemctl is-active --quiet dnsmasq 2>/dev/null; then
+        print_warn "dnsmasq is running on port 53 — stopping it"
+        run_quietly "Stopping dnsmasq"           systemctl stop    dnsmasq
+        run_quietly "Disabling dnsmasq autostart" systemctl disable dnsmasq
+    fi
+
+    # Stop bind9 / named
+    for svc in bind9 named; do
+        if systemctl is-active --quiet "$svc" 2>/dev/null; then
+            print_warn "${svc} is running on port 53 — stopping it"
+            run_quietly "Stopping ${svc}"            systemctl stop    "$svc"
+            run_quietly "Disabling ${svc} autostart"  systemctl disable "$svc"
+        fi
+    done
+
+    # systemd-resolved stub will be fixed by fix_resolved() below
+    print_ok "Port 53 conflict checks done"
 }
 
 # ── Docker ───────────────────────────────────────────────────────────────────
 ensure_docker() {
     print_step "Docker"
 
-    if has_cmd docker; then
-        print_ok "Docker already installed ($(docker --version | head -1))"
+    # Check both binary presence AND daemon health
+    if has_cmd docker && docker info &>/dev/null; then
+        print_ok "Docker is installed and running ($(docker --version | cut -d' ' -f3 | tr -d ','))"
         return
     fi
 
-    print_info "Docker not found — installing via official convenience script..."
     run_quietly "Downloading Docker install script" \
         curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
 
@@ -130,78 +174,105 @@ ensure_docker() {
     rm -f /tmp/get-docker.sh
 
     run_quietly "Enabling Docker service" systemctl enable --now docker
-    print_ok "Docker installed successfully"
+
+    # Poll until daemon is up (up to 20 s)
+    local i=0
+    while ! docker info &>/dev/null && (( i < 20 )); do sleep 1; (( i++ )); done
+    if ! docker info &>/dev/null; then
+        print_error "Docker daemon failed to start. Check: systemctl status docker"
+        exit 1
+    fi
+
+    print_ok "Docker installed and running"
 }
 
 # ── Angie ────────────────────────────────────────────────────────────────────
 install_angie() {
-    print_step "Angie (nginx fork with ACME)"
+    print_step "Angie (nginx fork with built-in ACME)"
 
     if has_cmd angie; then
         print_ok "Angie already installed ($(angie -v 2>&1 | head -1))"
         return
     fi
 
+    # Install prerequisites (including dnsutils for 'dig' self-test)
     run_quietly "Installing prerequisites" \
-        apt-get install -y -q curl gnupg2 ca-certificates lsb-release apt-transport-https
+        apt-get install -y -q curl gnupg2 ca-certificates lsb-release apt-transport-https dnsutils
 
     run_quietly "Adding Angie GPG key" bash -c \
         'curl -fsSL https://angie.software/angie/signing.asc | gpg --dearmor -o /usr/share/keyrings/angie.gpg'
 
     local codename
-    codename=$(lsb_release -sc 2>/dev/null || echo "${OS_CODENAME}")
+    codename=$(lsb_release -sc 2>/dev/null || echo "${OS_CODENAME:-}")
+    [[ -z "$codename" ]] && { print_error "Cannot determine OS codename."; exit 1; }
 
     run_quietly "Adding Angie apt repository" bash -c \
         "echo 'deb [signed-by=/usr/share/keyrings/angie.gpg] https://deb.angie.software/angie/${OS_ID} ${codename} main' \
          > /etc/apt/sources.list.d/angie.list"
 
+    # apt-get update runs once here; main() does NOT call it again before install_angie
     run_quietly "Updating apt cache" apt-get update -q
 
     run_quietly "Installing Angie" apt-get install -y -q angie
 
     run_quietly "Enabling Angie service" systemctl enable angie
 
-    print_ok "Angie installed successfully"
+    print_ok "Angie installed"
 }
 
-# ── systemd-resolved conflict ─────────────────────────────────────────────────
+# ── systemd-resolved ──────────────────────────────────────────────────────────
 fix_resolved() {
     print_step "systemd-resolved (DNSStubListener)"
 
-    local conf="/etc/systemd/resolved.conf"
-    if [[ ! -f "$conf" ]]; then
-        print_warn "$conf not found — skipping"
+    if ! systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+        print_info "systemd-resolved not running — skipping"
         return
     fi
 
-    # Backup once
-    if [[ ! -f "${conf}.aiway.bak" ]]; then
-        cp "$conf" "${conf}.aiway.bak"
-        print_info "Backed up to ${conf}.aiway.bak"
-    fi
+    local resolved_conf="/etc/systemd/resolved.conf"
+    [[ ! -f "$resolved_conf" ]] && { print_warn "$resolved_conf not found — skipping"; return; }
 
-    # Disable stub listener so port 53 is free for Blocky
-    if grep -q "^DNSStubListener=no" "$conf"; then
-        print_ok "DNSStubListener=no already set"
-    else
-        sed -i '/^#\?DNSStubListener=/d' "$conf"
-        echo "DNSStubListener=no" >> "$conf"
-        print_ok "Set DNSStubListener=no"
-    fi
+    # Backup once (never overwrite an existing backup — it's the original)
+    [[ ! -f "${resolved_conf}.aiway.bak" ]] && cp "$resolved_conf" "${resolved_conf}.aiway.bak"
+    print_info "Backup at ${resolved_conf}.aiway.bak"
+
+    # Remove any existing DNSStubListener line (commented or not) then set to no
+    sed -i '/^#\?DNSStubListener=/d' "$resolved_conf"
+    echo "DNSStubListener=no" >> "$resolved_conf"
 
     run_quietly "Restarting systemd-resolved" systemctl restart systemd-resolved
+
+    # Verify port 53 is now actually free (up to 5 s)
+    if wait_for_port_free 53 5; then
+        print_ok "Port 53 is free"
+    else
+        print_warn "Something is still on port 53 — check: ss -tlunp | grep :53"
+    fi
 }
 
-# ── Generate Angie config ─────────────────────────────────────────────────────
+# ── Generate Angie configuration ──────────────────────────────────────────────
+#
+# Architecture when DOT_DOMAIN is set (solves the stream/http port-443 conflict):
+#
+#   client ──443──► Angie stream (ssl_preread)
+#                       │
+#                       ├── SNI = DOT_DOMAIN ──► 127.0.0.1:8443 (http block, DoH)
+#                       └── SNI = anything else ──► $ssl_preread_server_name:443
+#
+#   client ──853──► Angie stream (ssl_preread, terminates TLS) ──► 127.0.0.1:53 (Blocky)
+#
+# The http block NEVER binds 443 publicly — it only listens on 127.0.0.1:8443.
+# The stream block handles ALL public port 443 traffic via SNI routing.
+#
 generate_angie_conf() {
     print_step "Generating Angie configuration"
 
-    mkdir -p "$ANGIE_STREAM_DIR" "$ANGIE_HTTP_DIR"
+    mkdir -p "$ANGIE_STREAM_DIR" "$ANGIE_HTTP_DIR" /var/log/angie /var/lib/angie/acme
 
     # ── main angie.conf ────────────────────────────────────────────────────
     cat > "$ANGIE_CONF" <<ANGIEEOF
-# /etc/angie/angie.conf — generated by aiway installer
-# Do not edit manually; re-run install.sh to regenerate.
+# /etc/angie/angie.conf — generated by aiway $(date -u '+%Y-%m-%d %H:%M UTC')
+# https://github.com/yourname/aiway
 
 user www-data;
 worker_processes auto;
@@ -209,17 +280,17 @@ pid /run/angie.pid;
 include /etc/angie/modules-enabled/*.conf;
 
 events {
-    worker_connections 1024;
+    worker_connections 4096;
     multi_accept on;
+    use epoll;
 }
 
-# ── HTTP block (ACME challenge + DoH) ─────────────────────────────────────
 http {
-    include       /etc/angie/mime.types;
-    default_type  application/octet-stream;
+    include      /etc/angie/mime.types;
+    default_type application/octet-stream;
 
     access_log /var/log/angie/access.log;
-    error_log  /var/log/angie/error.log;
+    error_log  /var/log/angie/error.log warn;
 
     sendfile    on;
     tcp_nopush  on;
@@ -230,55 +301,98 @@ http {
     include ${ANGIE_HTTP_DIR}/*.conf;
 }
 
-# ── Stream block (SNI proxy + DoT) ────────────────────────────────────────
 stream {
-    log_format proxy '\$remote_addr [\$time_local] '
-                     '\$protocol \$status \$bytes_sent \$bytes_received '
-                     '\$session_time "\$upstream_addr"';
+    log_format proxy '\$remote_addr [\$time_local] \$protocol \$status '
+                     '\$bytes_sent \$bytes_received \$session_time '
+                     '"\$ssl_preread_server_name"';
 
     access_log /var/log/angie/stream.log proxy;
 
     include ${ANGIE_STREAM_DIR}/*.conf;
 }
 ANGIEEOF
+
+    # ── Append ACME block if domain provided ──────────────────────────────
+    if [[ -n "$DOT_DOMAIN" ]]; then
+        cat >> "$ANGIE_CONF" <<ACMEEOF
+
+# Let's Encrypt via Angie built-in ACME client
+acme {
+    client letsencrypt {
+        directory https://acme-v02.api.letsencrypt.org/directory;
+        email     ${ACME_EMAIL};
+    }
+
+    certificate ${DOT_DOMAIN} {
+        client  letsencrypt;
+        domains ${DOT_DOMAIN};
+        webroot /var/lib/angie/acme;
+    }
+}
+ACMEEOF
+    fi
+
     print_ok "Written: ${ANGIE_CONF}"
 
-    # ── SNI map + proxy ────────────────────────────────────────────────────
-    {
-        echo "# /etc/angie/stream.d/ai-proxy.conf — SNI pass-through for AI services"
-        echo "# Generated by aiway installer — $(date -u '+%Y-%m-%d %H:%M UTC')"
-        echo ""
-        echo "map \$ssl_preread_server_name \$upstream_name {"
-        echo "    default  passthrough;"
-        for domain in "${AI_DOMAINS[@]}"; do
-            # wildcard entries in the map use a leading dot
-            if [[ "$domain" == \** ]]; then
-                local bare="${domain#\*.}"
-                printf "    %-45s passthrough;\n" ".${bare}"
-            else
-                printf "    %-45s passthrough;\n" "${domain}"
-            fi
-        done
-        echo "}"
-        echo ""
-        echo "server {"
-        echo "    listen      443;"
-        echo "    ssl_preread on;"
-        echo ""
-        echo "    proxy_pass          \$ssl_preread_server_name:443;"
-        echo "    proxy_connect_timeout 10s;"
-        echo "    proxy_timeout       600s;"
-        echo "}"
-    } > "${ANGIE_STREAM_DIR}/ai-proxy.conf"
+    # ── Stream block ───────────────────────────────────────────────────────
+    if [[ -n "$DOT_DOMAIN" ]]; then
+        # SNI map routes DOT_DOMAIN to local HTTPS (127.0.0.1:8443).
+        # Everything else passes through to the real server by SNI name.
+        # This is the ONLY correct way to have both a local HTTPS service
+        # and a pass-through SNI proxy on the same port 443.
+        cat > "${ANGIE_STREAM_DIR}/ai-proxy.conf" <<STREAMEOF
+# SNI router: ${DOT_DOMAIN} → local HTTPS; all other TLS → passthrough
+map \$ssl_preread_server_name \$stream_upstream {
+    "${DOT_DOMAIN}"  "127.0.0.1:8443";
+    default          "\$ssl_preread_server_name:443";
+}
+
+server {
+    listen      443;
+    ssl_preread on;
+
+    proxy_pass            \$stream_upstream;
+    proxy_connect_timeout 10s;
+    proxy_timeout         600s;
+    proxy_buffer_size     16k;
+}
+
+# DNS-over-TLS (853): terminates TLS, proxies plain DNS to Blocky on 53
+server {
+    listen     853 ssl;
+    ssl_certificate     /etc/angie/acme/${DOT_DOMAIN}/fullchain.cer;
+    ssl_certificate_key /etc/angie/acme/${DOT_DOMAIN}/${DOT_DOMAIN}.key;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+    ssl_session_cache   shared:DoT:4m;
+    ssl_session_timeout 5m;
+
+    proxy_pass            127.0.0.1:53;
+    proxy_connect_timeout 5s;
+    proxy_timeout         30s;
+}
+STREAMEOF
+    else
+        # No DOT_DOMAIN — pure blind passthrough, simplest possible config
+        cat > "${ANGIE_STREAM_DIR}/ai-proxy.conf" <<STREAMEOF
+# Pure SNI passthrough: all TLS forwarded unmodified to the real server
+server {
+    listen      443;
+    ssl_preread on;
+
+    proxy_pass            \$ssl_preread_server_name:443;
+    proxy_connect_timeout 10s;
+    proxy_timeout         600s;
+    proxy_buffer_size     16k;
+}
+STREAMEOF
+    fi
     print_ok "Written: ${ANGIE_STREAM_DIR}/ai-proxy.conf"
 
-    # ── HTTP services (ACME + DoH) ─────────────────────────────────────────
+    # ── HTTP block ─────────────────────────────────────────────────────────
     if [[ -n "$DOT_DOMAIN" ]]; then
         cat > "${ANGIE_HTTP_DIR}/local-services.conf" <<HTTPEOF
-# /etc/angie/http.d/local-services.conf — ACME challenge + DoH
-# Generated by aiway installer
-
-# HTTP → redirect + ACME challenge
+# Port 80: redirect to HTTPS + ACME challenge
 server {
     listen 80;
     server_name ${DOT_DOMAIN};
@@ -287,64 +401,44 @@ server {
         root /var/lib/angie/acme;
         try_files \$uri =404;
     }
-
-    location / {
-        return 301 https://\$host\$request_uri;
-    }
+    location / { return 301 https://\$host\$request_uri; }
 }
 
-# HTTPS — DoH endpoint + ACME certificate management
+# Internal HTTPS on 127.0.0.1:8443 — reached via stream SNI map on port 443
+# (never exposed directly to the internet)
 server {
-    listen 443 ssl;
+    listen 127.0.0.1:8443 ssl;
     server_name ${DOT_DOMAIN};
 
     ssl_certificate     /etc/angie/acme/${DOT_DOMAIN}/fullchain.cer;
     ssl_certificate_key /etc/angie/acme/${DOT_DOMAIN}/${DOT_DOMAIN}.key;
-
     ssl_protocols       TLSv1.2 TLSv1.3;
     ssl_ciphers         HIGH:!aNULL:!MD5;
     ssl_prefer_server_ciphers on;
-    ssl_session_cache   shared:SSL:10m;
+    ssl_session_cache   shared:DoH:4m;
+    ssl_session_timeout 5m;
 
-    # DNS-over-HTTPS endpoint (Blocky listens on 4000)
+    add_header Strict-Transport-Security "max-age=31536000" always;
+
+    # DNS-over-HTTPS: forward to Blocky's HTTP port
     location /dns-query {
         proxy_pass         http://127.0.0.1:4000/dns-query;
         proxy_http_version 1.1;
         proxy_set_header   Host \$host;
         proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_read_timeout 10s;
     }
 
     location / {
-        return 200 'aiway DNS proxy is running\n';
+        return 200 'aiway is running\n';
         add_header Content-Type text/plain;
     }
 }
 HTTPEOF
-
-        # ACME client block — Angie's built-in acme module
-        cat >> "$ANGIE_CONF" <<ACMEEOF
-
-# ── ACME (Let's Encrypt) ─────────────────────────────────────────────────
-acme {
-    client {
-        name       letsencrypt;
-        directory  https://acme-v02.api.letsencrypt.org/directory;
-        email      ${ACME_EMAIL};
-    }
-
-    certificate ${DOT_DOMAIN} {
-        client     letsencrypt;
-        domains    ${DOT_DOMAIN};
-        webroot    /var/lib/angie/acme;
-    }
-}
-ACMEEOF
-        print_ok "Written: ${ANGIE_HTTP_DIR}/local-services.conf"
+        print_ok "Written: ${ANGIE_HTTP_DIR}/local-services.conf (with DoH on port 443 via SNI)"
     else
-        # Minimal placeholder so Angie doesn't complain about empty include
         cat > "${ANGIE_HTTP_DIR}/local-services.conf" <<HTTPEOF
-# /etc/angie/http.d/local-services.conf
-# No domain configured — ACME/DoH disabled.
+# Minimal placeholder — no domain configured
 server {
     listen 80 default_server;
     server_name _;
@@ -353,226 +447,218 @@ server {
 HTTPEOF
         print_ok "Written: ${ANGIE_HTTP_DIR}/local-services.conf (minimal)"
     fi
-
-    # ── DoT — stream server on 853 ────────────────────────────────────────
-    if [[ -n "$DOT_DOMAIN" ]]; then
-        cat >> "${ANGIE_STREAM_DIR}/ai-proxy.conf" <<DOTEOF
-
-# DNS-over-TLS (port 853) — forwards to Blocky on 53
-server {
-    listen     853 ssl;
-    ssl_certificate     /etc/angie/acme/${DOT_DOMAIN}/fullchain.cer;
-    ssl_certificate_key /etc/angie/acme/${DOT_DOMAIN}/${DOT_DOMAIN}.key;
-    ssl_protocols       TLSv1.2 TLSv1.3;
-
-    proxy_pass          127.0.0.1:53;
-    proxy_connect_timeout 5s;
-    proxy_timeout       10s;
-}
-DOTEOF
-        print_ok "DoT server block added to ${ANGIE_STREAM_DIR}/ai-proxy.conf"
-    fi
 }
 
-# ── Blocky ───────────────────────────────────────────────────────────────────
+# ── Blocky configuration ──────────────────────────────────────────────────────
 generate_blocky_config() {
     print_step "Generating Blocky DNS configuration"
 
     mkdir -p "$BLOCKY_DIR"
 
-    # Build customDNS mapping block
-    local dns_mapping=""
+    local dns_entries=""
     for domain in "${AI_APEX_DOMAINS[@]}"; do
-        dns_mapping+="    ${domain}: ${VPS_IP}"$'\n'
+        dns_entries+="    ${domain}: ${VPS_IP}"$'\n'
     done
 
     cat > "$BLOCKY_CONFIG" <<BLOCKYEOF
-# /opt/blocky/config.yml — generated by aiway installer
-# Blocky DNS: https://0xerr0r.github.io/blocky/
+# /opt/blocky/config.yml — generated by aiway
+# https://0xerr0r.github.io/blocky/
 
-# ── Upstream resolvers ────────────────────────────────────────────────────
 upstreams:
   groups:
     default:
-      - 8.8.8.8
-      - 8.8.4.4
-      - 1.1.1.1
-      - 1.0.0.1
+      - tcp+udp:8.8.8.8
+      - tcp+udp:8.8.4.4
+      - tcp+udp:1.1.1.1
+      - tcp+udp:1.0.0.1
 
-# ── Custom DNS overrides (AI domains → this VPS) ─────────────────────────
+bootstrapDns:
+  - 8.8.8.8
+  - 1.1.1.1
+
+# AI domains → this VPS IP; all other domains resolve normally
 customDNS:
   mapping:
-${dns_mapping}
-# ── Ports ─────────────────────────────────────────────────────────────────
+${dns_entries}
 ports:
-  dns: 53
-  http: 4000      # DoH endpoint
+  dns:  53
+  http: 4000   # DoH endpoint (proxied via Angie at /dns-query)
 
-# ── Logging ───────────────────────────────────────────────────────────────
 log:
-  level: warn
+  level:  warn
   format: text
 
-# ── Performance ───────────────────────────────────────────────────────────
 caching:
-  minTime: 5m
-  maxTime: 30m
-  prefetching: true
+  minTime:          5m
+  maxTime:          30m
+  prefetching:      true
+  prefetchExpires:  2h
+  prefetchThreshold: 5
+
+queryLog:
+  type: none
 BLOCKYEOF
 
     print_ok "Written: ${BLOCKY_CONFIG}"
 }
 
-# ── Run Blocky container ──────────────────────────────────────────────────────
+# ── Start Blocky container ────────────────────────────────────────────────────
 start_blocky() {
     print_step "Starting Blocky DNS container"
 
     # Remove stale container if present
-    if docker ps -a --format '{{.Names}}' | grep -q "^blocky$"; then
-        print_info "Removing existing blocky container..."
-        docker rm -f blocky >/dev/null 2>&1 || true
+    if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^blocky$"; then
+        run_quietly "Removing stale blocky container" docker rm -f blocky
     fi
 
-    run_quietly "Pulling spx01/blocky image" docker pull spx01/blocky
+    run_quietly "Pulling spx01/blocky image" docker pull spx01/blocky:latest
 
+    # --network=host avoids Docker NAT for UDP 53 (more reliable than port mapping)
     docker run -d \
-        --name blocky \
+        --name  blocky \
         --restart=always \
-        -p 53:53/udp \
-        -p 53:53/tcp \
-        -p 4000:4000 \
+        --network=host \
         -v "${BLOCKY_CONFIG}:/app/config.yml:ro" \
-        spx01/blocky >/dev/null
+        spx01/blocky:latest >/dev/null
 
     print_ok "Blocky container started"
 
-    # Quick self-test
-    sleep 2
+    # Poll for readiness (up to 30 s) — healthcheck or successful DNS query
+    local deadline=$(( $(date +%s) + 30 ))
+    local ready=false
+    echo -ne "       ${DIM}Waiting for Blocky to accept queries...${RESET}"
+    while (( $(date +%s) < deadline )); do
+        if docker exec blocky blocky healthcheck &>/dev/null 2>&1; then
+            ready=true; break
+        fi
+        if has_cmd dig && dig +short +time=1 openai.com @127.0.0.1 &>/dev/null 2>&1; then
+            ready=true; break
+        fi
+        echo -ne "."
+        sleep 1
+    done
+    echo ""
+
+    if [[ "$ready" == "false" ]]; then
+        if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^blocky$"; then
+            print_error "Blocky container exited! Logs:"
+            docker logs blocky 2>&1 | tail -20
+            exit 1
+        fi
+        print_warn "Blocky startup timed out — container is running, may need another moment"
+    fi
+
+    # DNS self-test
     if has_cmd dig; then
         local result
-        result=$(dig +short +time=3 openai.com @127.0.0.1 2>/dev/null || true)
+        result=$(dig +short +time=5 +tries=2 openai.com @127.0.0.1 2>/dev/null | head -1 || true)
         if [[ "$result" == "$VPS_IP" ]]; then
-            print_ok "DNS test: openai.com → ${VPS_IP} (correct)"
+            print_ok "DNS self-test passed: openai.com → ${VPS_IP}"
         elif [[ -n "$result" ]]; then
-            print_warn "DNS test returned ${result} instead of ${VPS_IP} — check config"
+            print_warn "DNS self-test: openai.com → ${result} (expected ${VPS_IP}) — check ${BLOCKY_CONFIG}"
         else
-            print_warn "DNS test inconclusive (dig returned empty) — Blocky may still be starting"
+            print_warn "DNS self-test inconclusive (empty response) — Blocky may still be initializing"
         fi
     fi
 }
 
-# ── Start/test Angie ─────────────────────────────────────────────────────────
+# ── Start Angie ───────────────────────────────────────────────────────────────
 start_angie() {
     print_step "Starting Angie"
 
-    mkdir -p /var/log/angie /var/lib/angie/acme
-
-    # Validate config before starting
-    if ! angie -t 2>/dev/null; then
-        print_error "Angie config test failed. Output:"
-        angie -t
+    # Config test first — shows exact error line if broken
+    if ! angie -t 2>/tmp/angie-test.log; then
+        print_error "Angie config test failed:"
+        cat /tmp/angie-test.log; rm -f /tmp/angie-test.log
         exit 1
     fi
-    print_ok "Angie config test passed"
+    rm -f /tmp/angie-test.log
+    print_ok "Config syntax OK"
 
-    run_quietly "Restarting Angie" systemctl restart angie
+    run_quietly "Starting Angie" systemctl restart angie
 
     sleep 1
     if systemctl is-active --quiet angie; then
         print_ok "Angie is running"
     else
-        print_error "Angie failed to start — check: journalctl -u angie -n 50"
+        print_error "Angie failed to start. Last 15 log lines:"
+        journalctl -u angie -n 15 --no-pager
         exit 1
     fi
 }
 
-# ── Print firewall reminder ───────────────────────────────────────────────────
-check_firewall() {
+# ── Firewall ──────────────────────────────────────────────────────────────────
+configure_firewall() {
     print_step "Firewall"
-    local ports="443/tcp  53/udp  53/tcp"
-    [[ -n "$DOT_DOMAIN" ]] && ports+="  853/tcp  80/tcp"
 
-    if has_cmd ufw; then
-        local ufw_status
-        ufw_status=$(ufw status 2>/dev/null | head -1)
-        if [[ "$ufw_status" == *"active"* ]]; then
-            print_info "ufw is active. Opening required ports..."
-            ufw allow 443/tcp  comment 'aiway SNI proxy'  >/dev/null
-            ufw allow 53/udp   comment 'aiway DNS'         >/dev/null
-            ufw allow 53/tcp   comment 'aiway DNS'         >/dev/null
-            [[ -n "$DOT_DOMAIN" ]] && ufw allow 853/tcp comment 'aiway DoT' >/dev/null
-            [[ -n "$DOT_DOMAIN" ]] && ufw allow 80/tcp  comment 'aiway ACME' >/dev/null
-            print_ok "ufw rules added for: ${ports}"
-        else
-            print_warn "ufw is installed but inactive — no rules applied"
+    local extra_ports=""
+    [[ -n "$DOT_DOMAIN" ]] && extra_ports=", 853, 80"
+
+    if has_cmd ufw && ufw status 2>/dev/null | head -1 | grep -q "active"; then
+        # Older ufw versions don't support inline 'comment' — use plain form
+        ufw allow 443/tcp >/dev/null 2>&1 || true
+        ufw allow 53/udp  >/dev/null 2>&1 || true
+        ufw allow 53/tcp  >/dev/null 2>&1 || true
+        if [[ -n "$DOT_DOMAIN" ]]; then
+            ufw allow 853/tcp >/dev/null 2>&1 || true
+            ufw allow 80/tcp  >/dev/null 2>&1 || true
         fi
+        print_ok "ufw: opened ports 443, 53${extra_ports}"
+
     elif has_cmd firewall-cmd; then
         firewall-cmd --permanent --add-port=443/tcp >/dev/null
         firewall-cmd --permanent --add-port=53/udp  >/dev/null
         firewall-cmd --permanent --add-port=53/tcp  >/dev/null
-        [[ -n "$DOT_DOMAIN" ]] && firewall-cmd --permanent --add-port=853/tcp >/dev/null
-        [[ -n "$DOT_DOMAIN" ]] && firewall-cmd --permanent --add-port=80/tcp  >/dev/null
+        if [[ -n "$DOT_DOMAIN" ]]; then
+            firewall-cmd --permanent --add-port=853/tcp >/dev/null
+            firewall-cmd --permanent --add-port=80/tcp  >/dev/null
+        fi
         firewall-cmd --reload >/dev/null
-        print_ok "firewalld rules added for: ${ports}"
+        print_ok "firewalld: opened ports 443, 53${extra_ports}"
+
     else
-        print_warn "No supported firewall detected."
-        echo -e "  ${YELLOW}Make sure your VPS security group / iptables allows:${RESET}"
-        echo -e "  ${BOLD}  ${ports}${RESET}"
+        print_warn "No managed firewall detected."
+        echo -e "  ${YELLOW}Open these ports in your VPS control panel / iptables:${RESET}"
+        echo -e "  ${BOLD}  TCP 443  UDP/TCP 53${extra_ports:+  TCP 853  TCP 80}${RESET}"
     fi
 }
 
 # ── Final summary ─────────────────────────────────────────────────────────────
 print_summary() {
     echo ""
+    local w=62
     echo -e "${GREEN}${BOLD}"
-    echo "  ╔══════════════════════════════════════════════════════════╗"
-    echo "  ║           aiway installed successfully!                  ║"
-    echo "  ╚══════════════════════════════════════════════════════════╝"
+    printf "  ╔%s╗\n" "$(printf '═%.0s' $(seq 1 $w))"
+    printf "  ║  %-${w}s║\n" "✓  aiway installed successfully!"
+    printf "  ╚%s╝\n" "$(printf '═%.0s' $(seq 1 $w))"
     echo -e "${RESET}"
 
-    echo -e "  ${BOLD}DNS server to use on your devices:${RESET}"
-    echo -e "    ${CYAN}${BOLD}${VPS_IP}${RESET}  (plain DNS, port 53)\n"
+    echo -e "  ${BOLD}Set DNS to this IP on your devices:${RESET}"
+    echo -e "    ${CYAN}${BOLD}${VPS_IP}${RESET}   (plain DNS, UDP/TCP port 53)\n"
 
     if [[ -n "$DOT_DOMAIN" ]]; then
-        echo -e "  ${BOLD}DNS-over-TLS:${RESET}"
-        echo -e "    ${CYAN}${DOT_DOMAIN}${RESET}  port 853\n"
-        echo -e "  ${BOLD}DNS-over-HTTPS:${RESET}"
-        echo -e "    ${CYAN}https://${DOT_DOMAIN}/dns-query${RESET}\n"
+        echo -e "  ${BOLD}DNS-over-TLS:${RESET}    ${CYAN}${DOT_DOMAIN}${RESET}  (port 853)"
+        echo -e "  ${BOLD}DNS-over-HTTPS:${RESET}  ${CYAN}https://${DOT_DOMAIN}/dns-query${RESET}\n"
     fi
 
-    echo -e "  ${BOLD}Device setup instructions:${RESET}"
-
-    echo -e "  ${YELLOW}Android / iOS (Private DNS — DoT):${RESET}"
+    echo -e "  ${BOLD}Device setup:${RESET}"
     if [[ -n "$DOT_DOMAIN" ]]; then
-        echo -e "    Settings → Network → Private DNS → ${BOLD}${DOT_DOMAIN}${RESET}"
+        echo -e "  ${YELLOW}Android / iOS${RESET}   Private DNS → ${BOLD}${DOT_DOMAIN}${RESET}"
     else
-        echo -e "    Settings → Network → DNS → ${BOLD}${VPS_IP}${RESET}"
+        echo -e "  ${YELLOW}Android / iOS${RESET}   Wi-Fi DNS → ${BOLD}${VPS_IP}${RESET}"
     fi
-
-    echo -e "  ${YELLOW}Windows:${RESET}"
-    echo -e "    Settings → Network → DNS servers → ${BOLD}${VPS_IP}${RESET}"
-
-    echo -e "  ${YELLOW}macOS:${RESET}"
-    echo -e "    System Preferences → Network → DNS → Add ${BOLD}${VPS_IP}${RESET}"
-
-    echo -e "  ${YELLOW}Linux (/etc/resolv.conf):${RESET}"
-    echo -e "    nameserver ${BOLD}${VPS_IP}${RESET}"
-
-    echo -e "  ${YELLOW}Router (recommended — covers all devices):${RESET}"
-    echo -e "    Set primary DNS to ${BOLD}${VPS_IP}${RESET} in your router's DHCP settings\n"
+    echo -e "  ${YELLOW}macOS${RESET}           System Preferences → Network → DNS → ${BOLD}${VPS_IP}${RESET}"
+    echo -e "  ${YELLOW}Windows${RESET}         Settings → Network → DNS server → ${BOLD}${VPS_IP}${RESET}"
+    echo -e "  ${YELLOW}Router${RESET}          DHCP primary DNS → ${BOLD}${VPS_IP}${RESET}  (covers all devices)\n"
 
     echo -e "  ${BOLD}Add more domains later:${RESET}"
-    echo -e "    1. Edit ${CYAN}${SCRIPT_DIR}/lib/domains.sh${RESET}"
-    echo -e "    2. Re-run: ${BOLD}sudo bash ${SCRIPT_DIR}/install.sh${RESET}"
-    echo -e "    Or manually add to ${CYAN}${BLOCKY_CONFIG}${RESET} and restart:"
-    echo -e "    ${DIM}docker restart blocky${RESET}\n"
+    echo -e "  ${DIM}  Edit ${SCRIPT_DIR}/lib/domains.sh, then re-run: sudo bash install.sh${RESET}\n"
 
     echo -e "  ${BOLD}Useful commands:${RESET}"
-    echo -e "    ${DIM}docker logs blocky            # Blocky DNS logs${RESET}"
-    echo -e "    ${DIM}systemctl status angie        # Angie status${RESET}"
-    echo -e "    ${DIM}journalctl -u angie -f        # Angie live logs${RESET}"
-    echo -e "    ${DIM}dig openai.com @${VPS_IP}     # Test DNS${RESET}"
-    echo -e "    ${DIM}sudo bash ${SCRIPT_DIR}/uninstall.sh  # Remove aiway${RESET}\n"
+    echo -e "  ${DIM}  docker logs -f blocky              # live DNS logs${RESET}"
+    echo -e "  ${DIM}  systemctl status angie             # proxy status${RESET}"
+    echo -e "  ${DIM}  dig openai.com @${VPS_IP}          # test DNS resolution${RESET}"
+    echo -e "  ${DIM}  sudo bash ${SCRIPT_DIR}/uninstall.sh   # remove aiway${RESET}\n"
 }
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -582,20 +668,22 @@ main() {
     preflight
     gather_inputs
 
-    echo ""
     print_step "Starting installation"
 
+    # Single apt-get update here — install_angie does NOT call it again
     run_quietly "Updating apt package index" apt-get update -q
 
     ensure_docker
     install_angie
+    free_port_53
     fix_resolved
     generate_angie_conf
     generate_blocky_config
     start_blocky
     start_angie
-    check_firewall
+    configure_firewall
 
+    _INSTALL_SUCCESS=true   # disarm cleanup trap
     print_summary
 }
 

@@ -38,10 +38,15 @@ sudo bash install.sh
 
 В репозитории теперь есть отдельный роутерный контур: `AIWAY Manager` для Keenetic / Entware.
 
+Важно: это **опциональная** часть проекта. Если вам нужен только классический сценарий "поставить `aiway` на VPS и прописать DNS" - можно спокойно игнорировать `router/` и пользоваться только `install.sh`.
+
 - AWG-inspired веб-панель на самом роутере
+- DNS-only режим: можно просто указать уже существующий `aiway` DNS endpoint без SSH-доступа к VPS
 - установка `aiway` на новые VPS через SSH прямо из GUI
 - `install / sync / reset / uninstall` без ручной возни в админке Keenetic
 - health-check, fail-safe, кастомные домены и LAN-friendly CLI/API
+
+Текущая реализация рассчитана на Keenetic + Entware и уже собирается под несколько архитектур (`mips`, `mipsel`, `aarch64`).
 
 Подробности: [`docs/keenetic-dashboard.md`](docs/keenetic-dashboard.md) и подпроект [`router/`](router/).
 

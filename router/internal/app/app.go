@@ -225,16 +225,22 @@ func (a *App) handleDomainAction(w http.ResponseWriter, r *http.Request, add boo
 		writeError(w, http.StatusBadRequest, fmt.Errorf("active profile is not configured"))
 		return
 	}
+	if !profileCanManage(active) {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("кастомные домены доступны только для SSH-управляемого VPS профиля"))
+		return
+	}
 
 	var output string
 	var err error
 	if add {
-		if err = a.store.AddDomain(payload.Domain); err == nil {
-			output, err = a.runner.RemoteAddDomain(active, payload.Domain)
+		output, err = a.runner.RemoteAddDomain(active, payload.Domain)
+		if err == nil {
+			err = a.store.AddDomain(payload.Domain)
 		}
 	} else {
-		if err = a.store.RemoveDomain(payload.Domain); err == nil {
-			output, err = a.runner.RemoteRemoveDomain(active, payload.Domain)
+		output, err = a.runner.RemoteRemoveDomain(active, payload.Domain)
+		if err == nil {
+			err = a.store.RemoveDomain(payload.Domain)
 		}
 	}
 	if err != nil {
@@ -276,6 +282,10 @@ func (a *App) handleProfileAction(w http.ResponseWriter, r *http.Request, action
 	profile, ok := a.store.FindProfile(payload.ProfileID)
 	if !ok {
 		writeError(w, http.StatusNotFound, fmt.Errorf("profile not found"))
+		return
+	}
+	if !profileCanManage(profile) {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("этот профиль работает в DNS-only режиме; операции install/sync/reset/uninstall доступны только для SSH-управляемого VPS"))
 		return
 	}
 
@@ -322,7 +332,7 @@ func (a *App) checkProfile(profile Profile, reason string) (*ProfileStatus, erro
 	status.DesiredDNSOn = a.store.Config().Routing.DesiredDNSOn
 	status.EffectiveDNSOn = status.DesiredDNSOn && !a.store.Config().Routing.FailsafeActive
 	status.LastCheckAt = nowRFC3339()
-	status.CustomDomains = append([]string(nil), a.store.Config().Routing.CustomDomains...)
+	status.CustomDomains = cloneStrings(a.store.Config().Routing.CustomDomains)
 	status.ServiceCount = len(a.store.Config().Routing.Services) + len(status.CustomDomains)
 	config := a.store.Config()
 	address, sni := dnsTarget(config, profile)
@@ -392,7 +402,7 @@ func (a *App) checkProfile(profile Profile, reason string) (*ProfileStatus, erro
 	remoteStatus.LastCheckAt = nowRFC3339()
 	remoteStatus.LastSuccessAt = nowRFC3339()
 	remoteStatus.ConsecutiveFailures = 0
-	remoteStatus.CustomDomains = append([]string(nil), a.store.Config().Routing.CustomDomains...)
+	remoteStatus.CustomDomains = cloneStrings(a.store.Config().Routing.CustomDomains)
 	remoteStatus.ServiceCount = len(a.store.Config().Routing.Services) + len(remoteStatus.CustomDomains)
 
 	if a.store.Config().Routing.FailsafeActive && a.store.Config().Safety.AutoRecover {
@@ -451,6 +461,10 @@ func dnsTarget(config Config, profile Profile) (string, string) {
 		sni = strings.TrimSpace(profile.Domain)
 	}
 	return address, sni
+}
+
+func profileCanManage(profile Profile) bool {
+	return strings.TrimSpace(profile.Host) != ""
 }
 
 func (a *App) handleSPA(w http.ResponseWriter, r *http.Request) {

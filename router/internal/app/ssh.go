@@ -109,7 +109,7 @@ func (r SSHRunner) RemoteStatus(profile Profile) (ProfileStatus, error) {
 		LastCheckAt:   nowRFC3339(),
 		LastSuccessAt: nowRFC3339(),
 		InstallState:  "installed",
-		CustomDomains: append([]string(nil), profile.CustomDomains...),
+		CustomDomains: cloneStrings(profile.CustomDomains),
 		ServiceCount:  len(profile.CustomDomains),
 	}
 	if doctorErr == nil {

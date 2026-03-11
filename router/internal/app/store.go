@@ -72,7 +72,7 @@ func (s *Store) load() error {
 
 	for _, profile := range s.config.Profiles {
 		if _, ok := s.statuses[profile.ID]; !ok {
-			s.statuses[profile.ID] = &ProfileStatus{ProfileID: profile.ID, InstallState: "unknown", CustomDomains: append([]string(nil), profile.CustomDomains...)}
+			s.statuses[profile.ID] = &ProfileStatus{ProfileID: profile.ID, InstallState: "unknown", CustomDomains: cloneStrings(profile.CustomDomains)}
 		}
 	}
 	s.normalizeLocked()
@@ -144,7 +144,7 @@ func (s *Store) Snapshot() OverviewResponse {
 	statuses := make(map[string]*ProfileStatus, len(s.statuses))
 	for id, status := range s.statuses {
 		clone := *status
-		clone.CustomDomains = append([]string(nil), status.CustomDomains...)
+		clone.CustomDomains = cloneStrings(status.CustomDomains)
 		statuses[id] = &clone
 	}
 
@@ -152,7 +152,7 @@ func (s *Store) Snapshot() OverviewResponse {
 	logs := append([]LogEntry(nil), s.logs...)
 	configCopy := s.config
 	configCopy.Profiles = profiles
-	configCopy.Routing.CustomDomains = append([]string(nil), s.config.Routing.CustomDomains...)
+	configCopy.Routing.CustomDomains = cloneStrings(s.config.Routing.CustomDomains)
 	configCopy.Routing.Services = append([]ServiceToggle(nil), s.config.Routing.Services...)
 	if configCopy.Routing.CustomDomains == nil {
 		configCopy.Routing.CustomDomains = []string{}
@@ -183,7 +183,7 @@ func (s *Store) Config() Config {
 	defer s.mu.RUnlock()
 	configCopy := s.config
 	configCopy.Profiles = append([]Profile(nil), s.config.Profiles...)
-	configCopy.Routing.CustomDomains = append([]string(nil), s.config.Routing.CustomDomains...)
+	configCopy.Routing.CustomDomains = cloneStrings(s.config.Routing.CustomDomains)
 	configCopy.Routing.Services = append([]ServiceToggle(nil), s.config.Routing.Services...)
 	if configCopy.Routing.CustomDomains == nil {
 		configCopy.Routing.CustomDomains = []string{}
@@ -259,7 +259,7 @@ func (s *Store) RemoveDomain(domain string) error {
 			filtered = append(filtered, existing)
 		}
 	}
-	s.config.Routing.CustomDomains = append([]string(nil), filtered...)
+	s.config.Routing.CustomDomains = cloneStrings(filtered)
 	return s.saveLocked()
 }
 
@@ -297,7 +297,7 @@ func (s *Store) ProfileStatus(id string) *ProfileStatus {
 		return nil
 	}
 	clone := *current
-	clone.CustomDomains = append([]string(nil), current.CustomDomains...)
+	clone.CustomDomains = cloneStrings(current.CustomDomains)
 	return &clone
 }
 

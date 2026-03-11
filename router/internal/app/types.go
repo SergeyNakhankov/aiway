@@ -161,3 +161,10 @@ func DefaultConfig() Config {
 func nowRFC3339() string {
 	return time.Now().UTC().Format(time.RFC3339)
 }
+
+func cloneStrings(values []string) []string {
+	if len(values) == 0 {
+		return []string{}
+	}
+	return append([]string(nil), values...)
+}

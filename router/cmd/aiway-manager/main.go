@@ -44,7 +44,7 @@ func main() {
 func serveCmd(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	configDir := fs.String("config-dir", "/opt/etc/aiway-manager", "directory for aiway manager state")
-	addr := fs.String("addr", ":2222", "listen address")
+	addr := fs.String("addr", ":2233", "listen address")
 	_ = fs.Parse(args)
 
 	application, err := app.New(*configDir)
@@ -65,7 +65,7 @@ func serveCmd(args []string) {
 
 func endpointFlagSet(name string, args []string) (*flag.FlagSet, *string, *bool) {
 	fs := flag.NewFlagSet(name, flag.ExitOnError)
-	endpoint := fs.String("endpoint", "http://192.168.1.1:2222", "aiway manager endpoint")
+	endpoint := fs.String("endpoint", "http://192.168.1.1:2233", "aiway manager endpoint")
 	asJSON := fs.Bool("json", false, "print raw JSON")
 	_ = fs.Parse(args)
 	return fs, endpoint, asJSON
@@ -207,7 +207,7 @@ func profilesCmd(args []string) {
 	}
 
 	fs := flag.NewFlagSet("profiles", flag.ExitOnError)
-	endpoint := fs.String("endpoint", "http://192.168.1.1:2222", "aiway manager endpoint")
+	endpoint := fs.String("endpoint", "http://192.168.1.1:2233", "aiway manager endpoint")
 	profile := fs.String("profile", "", "profile id")
 	asJSON := fs.Bool("json", false, "print raw JSON")
 	_ = fs.Parse(args[1:])

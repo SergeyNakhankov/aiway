@@ -75,8 +75,35 @@ func (s *Store) load() error {
 			s.statuses[profile.ID] = &ProfileStatus{ProfileID: profile.ID, InstallState: "unknown", CustomDomains: append([]string(nil), profile.CustomDomains...)}
 		}
 	}
+	s.normalizeLocked()
 	s.pruneStatuses()
 	return nil
+}
+
+func (s *Store) normalizeLocked() {
+	if s.config.Routing.CustomDomains == nil {
+		s.config.Routing.CustomDomains = []string{}
+	}
+	if s.config.Routing.Services == nil {
+		s.config.Routing.Services = []ServiceToggle{}
+	}
+	if s.logs == nil {
+		s.logs = []LogEntry{}
+	}
+	for i := range s.config.Profiles {
+		if s.config.Profiles[i].CustomDomains == nil {
+			s.config.Profiles[i].CustomDomains = []string{}
+		}
+	}
+	for id, status := range s.statuses {
+		if status == nil {
+			continue
+		}
+		if status.CustomDomains == nil {
+			status.CustomDomains = []string{}
+		}
+		s.statuses[id] = status
+	}
 }
 
 func (s *Store) pruneStatuses() {
@@ -127,6 +154,12 @@ func (s *Store) Snapshot() OverviewResponse {
 	configCopy.Profiles = profiles
 	configCopy.Routing.CustomDomains = append([]string(nil), s.config.Routing.CustomDomains...)
 	configCopy.Routing.Services = append([]ServiceToggle(nil), s.config.Routing.Services...)
+	if configCopy.Routing.CustomDomains == nil {
+		configCopy.Routing.CustomDomains = []string{}
+	}
+	if logs == nil {
+		logs = []LogEntry{}
+	}
 
 	response := OverviewResponse{
 		Config:      configCopy,
@@ -152,6 +185,9 @@ func (s *Store) Config() Config {
 	configCopy.Profiles = append([]Profile(nil), s.config.Profiles...)
 	configCopy.Routing.CustomDomains = append([]string(nil), s.config.Routing.CustomDomains...)
 	configCopy.Routing.Services = append([]ServiceToggle(nil), s.config.Routing.Services...)
+	if configCopy.Routing.CustomDomains == nil {
+		configCopy.Routing.CustomDomains = []string{}
+	}
 	return configCopy
 }
 
@@ -160,10 +196,10 @@ func (s *Store) UpdateConfig(next Config) error {
 	defer s.mu.Unlock()
 
 	if next.Dashboard.Port == 0 {
-		next.Dashboard.Port = 2222
+		next.Dashboard.Port = 2233
 	}
 	if next.Dashboard.ListenAddress == "" {
-		next.Dashboard.ListenAddress = ":2222"
+		next.Dashboard.ListenAddress = ":2233"
 	}
 	if next.Safety.IntervalSeconds < 15 {
 		next.Safety.IntervalSeconds = 15
@@ -179,6 +215,7 @@ func (s *Store) UpdateConfig(next Config) error {
 	}
 
 	s.config = next
+	s.normalizeLocked()
 	s.pruneStatuses()
 	return s.saveLocked()
 }
@@ -245,6 +282,9 @@ func (s *Store) UpdateProfileStatus(status ProfileStatus) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	clone := status
+	if clone.CustomDomains == nil {
+		clone.CustomDomains = []string{}
+	}
 	s.statuses[status.ProfileID] = &clone
 	return s.saveLocked()
 }
@@ -275,5 +315,6 @@ func (s *Store) ClearLogs() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.logs = nil
+	s.normalizeLocked()
 	return s.saveLocked()
 }

@@ -27,11 +27,13 @@ type SafetyConfig struct {
 }
 
 type RoutingConfig struct {
-	DesiredDNSOn   bool            `json:"desiredDnsOn"`
-	CustomDomains  []string        `json:"customDomains"`
-	Services       []ServiceToggle `json:"services"`
-	LastAppliedAt  string          `json:"lastAppliedAt"`
-	FailsafeActive bool            `json:"failsafeActive"`
+	DesiredDNSOn    bool            `json:"desiredDnsOn"`
+	UpstreamAddress string          `json:"upstreamAddress"`
+	UpstreamSNI     string          `json:"upstreamSni"`
+	CustomDomains   []string        `json:"customDomains"`
+	Services        []ServiceToggle `json:"services"`
+	LastAppliedAt   string          `json:"lastAppliedAt"`
+	FailsafeActive  bool            `json:"failsafeActive"`
 }
 
 type ServiceToggle struct {
@@ -116,8 +118,8 @@ type DNSActionRequest struct {
 func DefaultConfig() Config {
 	return Config{
 		Dashboard: DashboardConfig{
-			Port:            2222,
-			ListenAddress:   ":2222",
+			Port:            2233,
+			ListenAddress:   ":2233",
 			AuthEnabled:     false,
 			ThemePreference: "awg-dark",
 		},

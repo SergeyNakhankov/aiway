@@ -16,10 +16,12 @@ import (
 )
 
 type App struct {
-	store  *Store
-	runner SSHRunner
-	mu     sync.Mutex
-	web    http.Handler
+	configDir string
+	store     *Store
+	runner    SSHRunner
+	router    RouterController
+	mu        sync.Mutex
+	web       http.Handler
 }
 
 func New(configDir string) (*App, error) {
@@ -34,9 +36,11 @@ func New(configDir string) (*App, error) {
 	}
 
 	return &App{
-		store:  store,
-		runner: SSHRunner{},
-		web:    http.FileServer(http.FS(distFS)),
+		configDir: configDir,
+		store:     store,
+		runner:    SSHRunner{},
+		router:    NewRouterController(configDir),
+		web:       http.FileServer(http.FS(distFS)),
 	}, nil
 }
 
@@ -161,17 +165,36 @@ func (a *App) handleToggleDNS(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
+	active, ok := a.store.ActiveProfile()
+	if !ok {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("active profile is not configured"))
+		return
+	}
 	var payload DNSActionRequest
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	config := a.store.Config()
+	address, sni := dnsTarget(config, active)
+	message, err := a.router.EnsureDNSState(address, sni, payload.Enabled)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
 		return
 	}
 	if err := a.store.SetDNSDesired(payload.Enabled); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	if payload.Enabled {
+		_ = a.store.SetFailsafe(false)
+	}
+	if message != "" {
+		_ = a.store.AppendLog("info", message)
+	}
 	_ = a.store.AppendLog("info", fmt.Sprintf("Режим aiway DNS переключен: %v", payload.Enabled))
-	writeJSON(w, http.StatusOK, map[string]any{"desiredDnsOn": payload.Enabled})
+	status, _ := a.runActiveCheck("toggle-dns")
+	writeJSON(w, http.StatusOK, map[string]any{"desiredDnsOn": payload.Enabled, "message": message, "status": status})
 }
 
 func (a *App) handleAddDomain(w http.ResponseWriter, r *http.Request) {
@@ -301,10 +324,41 @@ func (a *App) checkProfile(profile Profile, reason string) (*ProfileStatus, erro
 	status.LastCheckAt = nowRFC3339()
 	status.CustomDomains = append([]string(nil), a.store.Config().Routing.CustomDomains...)
 	status.ServiceCount = len(a.store.Config().Routing.Services) + len(status.CustomDomains)
+	config := a.store.Config()
+	address, sni := dnsTarget(config, profile)
+
+	if profile.Host == "" && address != "" {
+		status.Reachable = true
+		status.Installed = false
+		status.Angie = "external"
+		status.Blocky = "external"
+		status.InstallState = "external-dns"
+		status.LastError = ""
+		status.DesiredDNSOn = config.Routing.DesiredDNSOn
+		status.EffectiveDNSOn = status.DesiredDNSOn && !config.Routing.FailsafeActive
+		if err := quickTCPCheck(address, 853); err != nil {
+			status.Reachable = false
+			status.LastError = err.Error()
+			status.ConsecutiveFailures++
+			_ = a.store.AppendLog("warn", fmt.Sprintf("Проверка %s: внешний DNS %s недоступен: %s", reason, sni, err.Error()))
+			_ = a.store.UpdateProfileStatus(*status)
+			a.applyFailsafe(status)
+			return status, err
+		}
+		status.LastSuccessAt = nowRFC3339()
+		status.ConsecutiveFailures = 0
+		if status.DesiredDNSOn && !config.Routing.FailsafeActive {
+			if message, err := a.router.EnsureDNSState(address, sni, true); err == nil && message != "" {
+				_ = a.store.AppendLog("info", message)
+			}
+		}
+		_ = a.store.UpdateProfileStatus(*status)
+		return status, nil
+	}
 
 	if profile.Host == "" {
 		status.Reachable = false
-		status.LastError = "У активного профиля не заполнен адрес VPS"
+		status.LastError = "Заполни либо адрес VPS, либо DNS endpoint для отдельной установки aiway"
 		status.ConsecutiveFailures++
 		_ = a.store.UpdateProfileStatus(*status)
 		return status, fmt.Errorf(status.LastError)
@@ -342,9 +396,22 @@ func (a *App) checkProfile(profile Profile, reason string) (*ProfileStatus, erro
 	remoteStatus.ServiceCount = len(a.store.Config().Routing.Services) + len(remoteStatus.CustomDomains)
 
 	if a.store.Config().Routing.FailsafeActive && a.store.Config().Safety.AutoRecover {
+		if _, err := a.router.EnsureDNSState(address, sni, true); err == nil {
+			_ = a.store.AppendLog("info", "Маршрут aiway DNS снова привязан к основному WAN")
+		}
 		_ = a.store.SetFailsafe(false)
 		remoteStatus.EffectiveDNSOn = remoteStatus.DesiredDNSOn
 		_ = a.store.AppendLog("info", "Фейлсейф автоматически снят после успешной проверки")
+	}
+
+	if remoteStatus.DesiredDNSOn && !a.store.Config().Routing.FailsafeActive {
+		if message, err := a.router.EnsureDNSState(address, sni, true); err == nil {
+			if message != "" {
+				_ = a.store.AppendLog("info", message)
+			}
+		} else {
+			_ = a.store.AppendLog("warn", fmt.Sprintf("Не удалось применить DNS-маршрут на роутере: %v", err))
+		}
 	}
 
 	_ = a.store.UpdateProfileStatus(remoteStatus)
@@ -362,9 +429,28 @@ func (a *App) applyFailsafe(status *ProfileStatus) {
 	if !config.Routing.FailsafeActive {
 		_ = a.store.SetFailsafe(true)
 		_ = a.store.AppendLog("warn", "Фейлсейф активирован: aiway DNS временно отключен на роутере")
+		if message, err := a.router.EnsureDNSState("", "", false); err == nil {
+			if message != "" {
+				_ = a.store.AppendLog("warn", message)
+			}
+		} else {
+			_ = a.store.AppendLog("error", fmt.Sprintf("Не удалось отключить aiway DNS при фейлсейфе: %v", err))
+		}
 	}
 	status.EffectiveDNSOn = false
 	_ = a.store.UpdateProfileStatus(*status)
+}
+
+func dnsTarget(config Config, profile Profile) (string, string) {
+	address := strings.TrimSpace(config.Routing.UpstreamAddress)
+	sni := strings.TrimSpace(config.Routing.UpstreamSNI)
+	if address == "" {
+		address = strings.TrimSpace(profile.Host)
+	}
+	if sni == "" {
+		sni = strings.TrimSpace(profile.Domain)
+	}
+	return address, sni
 }
 
 func (a *App) handleSPA(w http.ResponseWriter, r *http.Request) {

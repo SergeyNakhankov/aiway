@@ -12,8 +12,8 @@ mkdir -p /opt/var/run "$CONFIG_DIR"
 
 get_port() {
     local port
-    port=$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$CONFIG_DIR/config.json" 2>/dev/null)
-    [ -n "$port" ] || port=2222
+    port=$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$CONFIG_DIR/config.json" 2>/dev/null | sed -n '1p')
+    [ -n "$port" ] || port=2233
     echo "$port"
 }
 

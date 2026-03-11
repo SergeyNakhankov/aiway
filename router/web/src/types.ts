@@ -41,6 +41,8 @@ export type Config = {
   }
   routing: {
     desiredDnsOn: boolean
+    upstreamAddress: string
+    upstreamSni: string
     customDomains: string[]
     services: ServiceToggle[]
     lastAppliedAt: string

@@ -174,9 +174,17 @@ func buildAuthMethod(profile Profile) (ssh.AuthMethod, error) {
 	case "password":
 		return ssh.Password(profile.Password), nil
 	default:
-		key, err := os.ReadFile(profile.PrivateKey)
-		if err != nil {
-			return nil, err
+		var (
+			key []byte
+			err error
+		)
+		if strings.Contains(profile.PrivateKey, "BEGIN ") || strings.Contains(profile.PrivateKey, "\n") {
+			key = []byte(profile.PrivateKey)
+		} else {
+			key, err = os.ReadFile(profile.PrivateKey)
+			if err != nil {
+				return nil, err
+			}
 		}
 		signer, err := ssh.ParsePrivateKey(key)
 		if err != nil {

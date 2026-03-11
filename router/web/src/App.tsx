@@ -20,7 +20,6 @@ function App() {
   const [route, setRoute] = useState<RouteKey>(initialRoute)
   const [overview, setOverview] = useState<OverviewResponse | null>(null)
   const [draftConfig, setDraftConfig] = useState<Config | null>(null)
-  const [pending, setPending] = useState('')
   const [error, setError] = useState('')
   const [newDomain, setNewDomain] = useState('')
 
@@ -51,94 +50,98 @@ function App() {
     ? overview?.statuses[activeProfile.id]
     : undefined
 
-  const navigate = (path: RouteKey) => {
+	const navigate = (path: RouteKey) => {
     window.history.pushState({}, '', path)
     setRoute(path)
   }
 
-  const run = async (label: string, action: () => Promise<unknown>) => {
+  const run = async (_label: string, action: () => Promise<unknown>) => {
     try {
-      setPending(label)
       setError('')
       await action()
       await refresh()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Операция завершилась с ошибкой')
-    } finally {
-      setPending('')
     }
   }
 
-  if (!overview || !draftConfig) {
-    return <div className="screen-loading">Загружаю AIWAY Manager...</div>
-  }
+	if (!overview || !draftConfig) {
+		return <div className="screen-loading">Загружаю AIWAY Manager...</div>
+	}
 
-  const dnsWanted = draftConfig.routing.desiredDnsOn
+	const customDomains = draftConfig.routing.customDomains ?? []
+	const logs = overview.logs ?? []
+	const dnsEndpoint = draftConfig.routing.upstreamAddress || activeProfile?.host || 'Не задан'
+	const dnsSni = draftConfig.routing.upstreamSni || activeProfile?.domain || 'Не задан'
+
+	const dnsWanted = draftConfig.routing.desiredDnsOn
   const failsafe = draftConfig.routing.failsafeActive
 
   return (
     <div className="shell">
-      <div className="shell-glow shell-glow-left" />
-      <div className="shell-glow shell-glow-right" />
-
       <header className="topbar">
-        <div>
-          <div className="eyebrow">AIWAY / KEENETIC CONTROL SURFACE</div>
-          <div className="brand-row">
-            <h1>AIWAY Manager</h1>
-            <span className={`status-pill ${activeStatus?.reachable ? 'ok' : 'bad'}`}>
-              {activeStatus?.reachable ? 'VPS на связи' : 'VPS недоступен'}
-            </span>
-            <span className={`status-pill ${failsafe ? 'warn' : 'ok'}`}>
-              {failsafe ? 'Фейлсейф активен' : 'Фейлсейф готов'}
-            </span>
+        <div className="topbar-inner">
+          <div className="logo-group">
+            <a className="logo-mark" href="/routing" onClick={(event) => { event.preventDefault(); navigate('/routing') }}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+              </svg>
+              <span className="logo-text">AIWAY Manager</span>
+            </a>
+            <span className="version-badge">v0.1.1</span>
           </div>
-          <p className="topbar-copy">
-            Полное управление aiway с роутера: установка на VPS, обновления, кастомные домены, проверки здоровья и
-            работа без входа в стандартную админку Keenetic.
-          </p>
-        </div>
 
-        <div className="hero-actions">
-          <button className="btn btn-secondary" onClick={() => void run('check', () => api.checkNow())}>
-            {pending === 'check' ? 'Проверяю...' : 'Проверить сейчас'}
-          </button>
-          <button
-            className={`btn ${dnsWanted && !failsafe ? 'btn-danger' : 'btn-primary'}`}
-            onClick={() => void run('dns', () => api.toggleDns(!dnsWanted))}
-          >
-            {pending === 'dns' ? 'Применяю...' : dnsWanted ? 'Отключить DNS-трюк' : 'Включить DNS-трюк'}
-          </button>
+          <nav className="topbar-nav">
+            {routes.map((item) => (
+              <a
+                key={item.path}
+                href={item.path}
+                className={`topbar-link ${route === item.path ? 'active' : ''}`}
+                onClick={(event) => {
+                  event.preventDefault()
+                  navigate(item.path)
+                }}
+              >
+                {item.label}
+              </a>
+            ))}
+          </nav>
+
+          <div className="topbar-actions">
+            <span className={`status-pill ${activeStatus?.reachable ? 'ok' : 'bad'}`}>
+              {activeStatus?.reachable ? 'VPS на связи' : 'Нет SSH'}
+            </span>
+            <span className={`status-pill ${failsafe ? 'warn' : 'muted'}`}>
+              {failsafe ? 'Фейлсейф' : 'Нормально'}
+            </span>
+            <button className="icon-button" title="Проверить сейчас" onClick={() => void run('check', () => api.checkNow())}>
+              ↻
+            </button>
+            <button
+              className={`dns-toggle-inline ${dnsWanted && !failsafe ? 'on' : 'off'}`}
+              title={dnsWanted ? 'Отключить DNS-трюк' : 'Включить DNS-трюк'}
+              onClick={() => void run('dns', () => api.toggleDns(!dnsWanted))}
+            >
+              AIWAY DNS {dnsWanted && !failsafe ? 'ВКЛ' : 'ВЫКЛ'}
+            </button>
+          </div>
         </div>
       </header>
-
-      <nav className="tabs">
-        {routes.map((item) => (
-          <button
-            key={item.path}
-            className={`tab ${route === item.path ? 'active' : ''}`}
-            onClick={() => navigate(item.path)}
-          >
-            <span>{item.short}</span>
-            <strong>{item.label}</strong>
-          </button>
-        ))}
-      </nav>
 
       {error && <div className="alert alert-error">{error}</div>}
 
       <section className="summary-grid">
         <article className="summary-card accent-cyan">
-          <span className="summary-label">Активный профиль</span>
-          <strong>{activeProfile?.name || 'Не выбран'}</strong>
+		  <span className="summary-label">DNS endpoint</span>
+		  <strong>{dnsEndpoint}</strong>
           <p>
-            {activeProfile?.host || 'Укажи IP или домен VPS'}:{activeProfile?.port ?? 22}
+			SNI: {dnsSni}
           </p>
         </article>
         <article className="summary-card accent-green">
           <span className="summary-label">Сервисы под проксирование</span>
           <strong>
-            {draftConfig.routing.services.filter((service) => service.enabled).length + draftConfig.routing.customDomains.length}
+            {draftConfig.routing.services.filter((service) => service.enabled).length + customDomains.length}
           </strong>
           <p>Штатные сервисы + кастомные домены, которыми управляешь прямо из панели.</p>
         </article>
@@ -149,7 +152,7 @@ function App() {
         </article>
         <article className="summary-card accent-pink">
           <span className="summary-label">CLI для людей и агентов</span>
-          <strong>`aiway-manager status --endpoint http://router:2222`</strong>
+          <strong>`aiway-manager status --endpoint http://router:2233`</strong>
           <p>Один и тот же API обслуживает GUI, CLI и автоматизации в локальной сети.</p>
         </article>
       </section>
@@ -165,6 +168,21 @@ function App() {
               <span className={`status-pill ${activeStatus?.effectiveDnsOn ? 'ok' : 'muted'}`}>
                 {activeStatus?.effectiveDnsOn ? 'DNS активен' : 'DNS неактивен'}
               </span>
+            </div>
+
+            <div className="dns-control-card">
+              <div>
+                <div className="dns-control-title">Главный переключатель DNS</div>
+                <div className="dns-control-meta">Endpoint: {dnsEndpoint}</div>
+                <div className="dns-control-meta">SNI: {dnsSni}</div>
+                <div className="dns-control-note">Если нужен только внешний aiway DNS без SSH-управления VPS, заполни endpoint и SNI в настройках и пользуйся этой кнопкой.</div>
+              </div>
+              <button
+                className={`btn ${dnsWanted && !failsafe ? 'btn-danger' : 'btn-primary'}`}
+                onClick={() => void run('dns', () => api.toggleDns(!dnsWanted))}
+              >
+                {dnsWanted && !failsafe ? 'Отключить aiway DNS' : 'Включить aiway DNS'}
+              </button>
             </div>
 
             <div className="service-list">
@@ -223,8 +241,8 @@ function App() {
               </button>
             </div>
             <div className="chips-stack">
-              {draftConfig.routing.customDomains.length === 0 && <p className="muted">Кастомных доменов пока нет.</p>}
-              {draftConfig.routing.customDomains.map((domain) => (
+              {customDomains.length === 0 && <p className="muted">Кастомных доменов пока нет.</p>}
+              {customDomains.map((domain) => (
                 <div key={domain} className="chip-row">
                   <span>{domain}</span>
                   <button className="ghost-link" onClick={() => void run('remove-domain', () => api.removeDomain(domain))}>
@@ -379,8 +397,8 @@ function App() {
               </button>
             </div>
             <div className="log-list">
-              {overview.logs.length === 0 && <p className="muted">Пока пусто. Как только начнешь операции с VPS или доменами, события появятся здесь.</p>}
-              {overview.logs.map((entry) => (
+              {logs.length === 0 && <p className="muted">Пока пусто. Как только начнешь операции с VPS или доменами, события появятся здесь.</p>}
+              {logs.map((entry) => (
                 <article key={`${entry.timestamp}-${entry.message}`} className={`log-item log-${entry.level}`}>
                   <span>{formatDate(entry.timestamp)}</span>
                   <strong>{entry.level.toUpperCase()}</strong>
@@ -397,6 +415,43 @@ function App() {
           <article className="panel panel-main">
             <div className="panel-head">
               <div>
+				<span className="panel-kicker">Отдельная установка aiway</span>
+				<h2>DNS endpoint для режима без SSH</h2>
+			</div>
+		  </div>
+
+		  <div className="form-grid compact-grid">
+			<label>
+			  <span>IP или домен DNS endpoint</span>
+			  <input
+				value={draftConfig.routing.upstreamAddress}
+				onChange={(event) =>
+				  setDraftConfig({
+					...draftConfig,
+					routing: { ...draftConfig.routing, upstreamAddress: event.target.value },
+				  })
+				}
+			  />
+			</label>
+			<label>
+			  <span>SNI / домен для DoT</span>
+			  <input
+				value={draftConfig.routing.upstreamSni}
+				onChange={(event) =>
+				  setDraftConfig({
+					...draftConfig,
+					routing: { ...draftConfig.routing, upstreamSni: event.target.value },
+				  })
+				}
+			  />
+			</label>
+		  </div>
+		  <p className="muted">Если aiway уже установлен где-то отдельно, можно заполнить только эти два поля и использовать дашборд как DNS-only контроллер без SSH-управления VPS.</p>
+		</article>
+
+		<article className="panel panel-main">
+		  <div className="panel-head">
+			<div>
                 <span className="panel-kicker">VPS-профили</span>
                 <h2>Серверы, которыми управляет роутер</h2>
               </div>
@@ -461,7 +516,7 @@ function App() {
                 <h2>API и CLI</h2>
               </div>
             </div>
-            <CodeBlock code={`aiway-manager status --endpoint http://192.168.1.1:2222\naiway-manager check --endpoint http://192.168.1.1:2222\naiway-manager dns on --endpoint http://192.168.1.1:2222\naiway-manager domains add perplexity.ai --endpoint http://192.168.1.1:2222\naiway-manager profiles install --profile ${activeProfile?.id || 'primary-vps'} --endpoint http://192.168.1.1:2222`} />
+            <CodeBlock code={`aiway-manager status --endpoint http://192.168.1.1:2233\naiway-manager check --endpoint http://192.168.1.1:2233\naiway-manager dns on --endpoint http://192.168.1.1:2233\naiway-manager domains add perplexity.ai --endpoint http://192.168.1.1:2233\naiway-manager profiles install --profile ${activeProfile?.id || 'primary-vps'} --endpoint http://192.168.1.1:2233`} />
             <p className="muted">
               Этот же интерфейс удобен для агентов: везде одинаковые JSON-ответы, один endpoint и предсказуемые действия.
             </p>
@@ -502,6 +557,8 @@ function ProfileEditor({
   onChange: (profile: Profile) => void
   onActivate: () => void
 }) {
+  const inlineKeyUploaded = Boolean(profile.privateKey && (profile.privateKey.includes('BEGIN ') || profile.privateKey.includes('\n')))
+
   return (
     <article className={`profile-card ${active ? 'active' : ''}`}>
       <div className="profile-header">
@@ -538,7 +595,33 @@ function ProfileEditor({
         {profile.authMethod === 'key' ? (
           <label>
             <span>Путь к приватному ключу</span>
-            <input value={profile.privateKey || ''} onChange={(event) => onChange({ ...profile, privateKey: event.target.value })} />
+            <input
+              value={inlineKeyUploaded ? '' : profile.privateKey || ''}
+              placeholder={inlineKeyUploaded ? 'Загружен приватный ключ из файла' : '/opt/etc/aiway-manager/id_ed25519'}
+              onChange={(event) => onChange({ ...profile, privateKey: event.target.value })}
+            />
+            <div className="key-upload-row">
+              <input
+                type="file"
+                accept=".pem,.key,.txt,*/*"
+                onChange={(event) => {
+                  const file = event.target.files?.[0]
+                  if (!file) return
+                  const reader = new FileReader()
+                  reader.onload = () => {
+                    const value = typeof reader.result === 'string' ? reader.result : ''
+                    onChange({ ...profile, privateKey: value })
+                  }
+                  reader.readAsText(file)
+                }}
+              />
+              {inlineKeyUploaded && (
+                <button className="ghost-link" type="button" onClick={() => onChange({ ...profile, privateKey: '' })}>
+                  Удалить загруженный ключ
+                </button>
+              )}
+            </div>
+            {inlineKeyUploaded && <span className="muted">Ключ загружен в панель и будет использоваться без отдельного пути на роутере.</span>}
           </label>
         ) : (
           <label>

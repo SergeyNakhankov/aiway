@@ -106,9 +106,10 @@ type OverviewResponse struct {
 }
 
 type RouterDNSState struct {
-	Active  bool   `json:"active"`
-	Address string `json:"address"`
-	SNI     string `json:"sni"`
+	Active      bool     `json:"active"`
+	Address     string   `json:"address"`
+	SNI         string   `json:"sni"`
+	NameServers []string `json:"nameServers"`
 }
 
 type UpdateInfo struct {

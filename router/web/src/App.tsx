@@ -74,9 +74,12 @@ function App() {
 	const logs = overview.logs ?? []
 	const dnsEndpoint = draftConfig.routing.upstreamAddress || activeProfile?.host || 'Не задан'
 	const dnsSni = draftConfig.routing.upstreamSni || activeProfile?.domain || 'Не задан'
-	const actualDnsOn = Boolean(overview.routerDns?.active)
-	const actualDnsEndpoint = overview.routerDns?.address || dnsEndpoint
-	const actualDnsSni = overview.routerDns?.sni || dnsSni
+  const actualDnsOn = Boolean(overview.routerDns?.active)
+  const actualDnsEndpoint = overview.routerDns?.address || dnsEndpoint
+  const actualDnsSni = overview.routerDns?.sni || dnsSni
+  const providerDnsSummary = overview.routerDns?.nameServers?.length
+    ? overview.routerDns.nameServers.join(', ')
+    : 'через ISP'
 	const enabledDomainCount = activeStatus?.serviceCount || Array.from(
 		new Set([
 			...draftConfig.routing.services.filter((service) => service.enabled).flatMap((service) => service.domains),
@@ -156,7 +159,11 @@ function App() {
             value={actualDnsOn ? 'AIWAY DNS активен' : 'AIWAY DNS выключен'}
             detail={failsafe ? 'Фейлсейф ограничивает трафик' : 'Маршрутится через основной WAN'}
           />
-          <OverviewCard label="Endpoint" value={actualDnsEndpoint} detail={`SNI: ${actualDnsSni}`} />
+          <OverviewCard
+            label="DNS путь"
+            value={actualDnsOn ? actualDnsEndpoint : 'Провайдер DNS'}
+            detail={actualDnsOn ? `SNI: ${actualDnsSni}` : providerDnsSummary}
+          />
           <OverviewCard
             label="Проверка"
             value={activeStatus?.lastSuccessAt ? formatDate(activeStatus.lastSuccessAt) : 'Еще не было'}
@@ -270,7 +277,7 @@ function App() {
                       </button>
                     </div>
                     {activeStatus?.installState === 'legacy' && <p className="muted">Для этого VPS панель меняет текущие Angie/Blocky-конфиги точечно, без полной переустановки.</p>}
-                    <div className="chips-stack">
+                    <div className="chips-stack chips-scroll">
                       {customDomains.length === 0 && <p className="muted">Кастомных доменов пока нет.</p>}
                       {customDomains.map((domain) => (
                         <div key={domain} className="chip-row">

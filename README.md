@@ -45,6 +45,7 @@ sudo bash install.sh
 - установка `aiway` на новые VPS через SSH прямо из GUI
 - `install / sync / reset / uninstall` без ручной возни в админке Keenetic
 - health-check, fail-safe, кастомные домены и LAN-friendly CLI/API
+- при `AIWAY OFF` роутер возвращается к DNS провайдера и закрепляет эти DNS через WAN/ISP, чтобы они не утекали в AWG default route
 
 Текущая реализация рассчитана на Keenetic + Entware и уже собирается под несколько архитектур (`mips`, `mipsel`, `aarch64`).
 

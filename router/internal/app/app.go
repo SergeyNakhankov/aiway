@@ -114,7 +114,7 @@ func (a *App) handleOverview(w http.ResponseWriter, r *http.Request) {
 	}
 	snapshot := a.store.Snapshot()
 	if state, err := a.router.RuntimeDNSState(); err == nil {
-		snapshot.RouterDNS = RouterDNSState{Active: state.Active, Address: state.Address, SNI: state.SNI}
+		snapshot.RouterDNS = RouterDNSState{Active: state.Active, Address: state.Address, SNI: state.SNI, NameServers: cloneStrings(state.NameServers)}
 	}
 	writeJSON(w, http.StatusOK, snapshot)
 }

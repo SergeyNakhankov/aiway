@@ -94,6 +94,7 @@ export type OverviewResponse = {
     active: boolean
     address: string
     sni: string
+    nameServers: string[]
   }
   version: string
   generatedAt: string

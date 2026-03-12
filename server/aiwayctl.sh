@@ -4,6 +4,7 @@ set -euo pipefail
 AIWAY_ETC_DIR="/etc/aiway"
 AIWAY_RUNTIME_DIR="${AIWAY_ETC_DIR}/runtime"
 AIWAY_CUSTOM_DOMAINS_FILE="${AIWAY_ETC_DIR}/custom-domains.txt"
+AIWAY_EXCLUDED_DOMAINS_FILE="${AIWAY_ETC_DIR}/excluded-domains.txt"
 AIWAY_INSTALLER_ENV="${AIWAY_ETC_DIR}/installer.env"
 BLOCKY_CONFIG="/opt/blocky/config.yml"
 ANGIE_STREAM_CONFIG="/etc/angie/stream.d/ai-proxy.conf"
@@ -12,6 +13,35 @@ ANGIE_STREAM_CONFIG="/etc/angie/stream.d/ai-proxy.conf"
 
 management_mode() {
     printf '%s' "${AIWAY_MANAGEMENT_MODE:-native}"
+}
+
+domain_exists() {
+    local needle="$1"
+    shift
+    local item
+    for item in "$@"; do
+        [[ "$item" == "$needle" ]] && return 0
+    done
+    return 1
+}
+
+load_excluded_domains() {
+    EXCLUDED_DOMAINS=()
+
+    local raw="${AIWAY_EXCLUDED_DOMAINS:-}"
+    local domain
+    raw="${raw//,/ }"
+    for domain in $raw; do
+        [[ -n "$domain" ]] && ! domain_exists "$domain" "${EXCLUDED_DOMAINS[@]}" && EXCLUDED_DOMAINS+=("$domain")
+    done
+
+    [[ -f "$AIWAY_EXCLUDED_DOMAINS_FILE" ]] || return 0
+    while IFS= read -r domain; do
+        domain="${domain%%#*}"
+        domain="${domain//[[:space:]]/}"
+        [[ -z "$domain" ]] && continue
+        domain_exists "$domain" "${EXCLUDED_DOMAINS[@]}" || EXCLUDED_DOMAINS+=("$domain")
+    done < "$AIWAY_EXCLUDED_DOMAINS_FILE"
 }
 
 json_escape() {
@@ -38,6 +68,7 @@ EOF
 load_domains() {
     source "${AIWAY_RUNTIME_DIR}/lib/domains.sh"
     EXTRA_DOMAINS=()
+    load_excluded_domains
 
     if [[ -f "$AIWAY_CUSTOM_DOMAINS_FILE" ]]; then
         while IFS= read -r line; do
@@ -57,6 +88,15 @@ load_domains() {
                 EXTRA_DOMAINS+=("$domain")
             fi
         done < <(legacy_domains)
+    fi
+
+    if ((${#EXCLUDED_DOMAINS[@]})); then
+        local filtered=()
+        local domain
+        for domain in "${AI_APEX_DOMAINS[@]}"; do
+            domain_exists "$domain" "${EXCLUDED_DOMAINS[@]}" || filtered+=("$domain")
+        done
+        AI_APEX_DOMAINS=("${filtered[@]}")
     fi
 }
 
@@ -135,16 +175,6 @@ PY
     systemctl reload angie >/dev/null 2>&1 || systemctl restart angie >/dev/null 2>&1
 }
 
-domain_exists() {
-    local needle="$1"
-    shift
-    local item
-    for item in "$@"; do
-        [[ "$item" == "$needle" ]] && return 0
-    done
-    return 1
-}
-
 angie_running() {
     systemctl is-active --quiet angie 2>/dev/null
 }
@@ -159,6 +189,7 @@ status_cmd() {
 	local blocky_state="stopped"
 	local dot_domain="${AIWAY_DOT_DOMAIN:-}"
 	local vps_ip="${AIWAY_VPS_IP:-}"
+	local proxy_target_ip="${AIWAY_TARGET_IP:-${AIWAY_VPS_IP:-}}"
 	local management_mode="${AIWAY_MANAGEMENT_MODE:-native}"
 	load_domains
 	local extra_json=""
@@ -191,6 +222,7 @@ status_cmd() {
     echo "Angie:  ${angie_state}"
     echo "Blocky: ${blocky_state}"
     echo "VPS IP: ${vps_ip:-unknown}"
+    echo "Proxy target: ${proxy_target_ip:-unknown}"
     echo "DoT/DoH: ${dot_domain:-disabled}"
 }
 

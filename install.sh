@@ -15,6 +15,7 @@ source "${SCRIPT_DIR}/lib/domains.sh"
 AIWAY_ETC_DIR="/etc/aiway"
 AIWAY_RUNTIME_DIR="${AIWAY_ETC_DIR}/runtime"
 AIWAY_CUSTOM_DOMAINS_FILE="${AIWAY_ETC_DIR}/custom-domains.txt"
+AIWAY_EXCLUDED_DOMAINS_FILE="${AIWAY_ETC_DIR}/excluded-domains.txt"
 AIWAY_INSTALLER_ENV="${AIWAY_ETC_DIR}/installer.env"
 AIWAY_CTL_TARGET="/usr/local/bin/aiwayctl"
 ANGIE_CONF="/etc/angie/angie.conf"
@@ -25,8 +26,10 @@ BLOCKY_CONFIG="${BLOCKY_DIR}/config.yml"
 
 # ── Globals populated by gather_inputs ───────────────────────────────────────
 VPS_IP=""
+TARGET_IP=""
 DOT_DOMAIN=""
 ACME_EMAIL=""
+EXCLUDED_APEX_DOMAINS=()
 
 append_unique() {
     local value="$1"
@@ -50,7 +53,49 @@ load_custom_domains() {
     done < "$AIWAY_CUSTOM_DOMAINS_FILE"
 }
 
+domain_exists() {
+    local needle="$1"
+    shift
+    local item
+    for item in "$@"; do
+        [[ "$item" == "$needle" ]] && return 0
+    done
+    return 1
+}
+
+load_excluded_domains() {
+    local raw domain
+
+    raw="${AIWAY_EXCLUDED_DOMAINS:-}"
+    raw="${raw//,/ }"
+    for domain in $raw; do
+        [[ -n "$domain" ]] && ! domain_exists "$domain" "${EXCLUDED_APEX_DOMAINS[@]}" && EXCLUDED_APEX_DOMAINS+=("$domain")
+    done
+
+    [[ -f "$AIWAY_EXCLUDED_DOMAINS_FILE" ]] || return 0
+
+    while IFS= read -r domain; do
+        domain="${domain%%#*}"
+        domain="${domain//[[:space:]]/}"
+        [[ -z "$domain" ]] && continue
+        domain_exists "$domain" "${EXCLUDED_APEX_DOMAINS[@]}" || EXCLUDED_APEX_DOMAINS+=("$domain")
+    done < "$AIWAY_EXCLUDED_DOMAINS_FILE"
+}
+
+apply_excluded_domains() {
+    ((${#EXCLUDED_APEX_DOMAINS[@]})) || return 0
+
+    local filtered=()
+    local domain
+    for domain in "${AI_APEX_DOMAINS[@]}"; do
+        domain_exists "$domain" "${EXCLUDED_APEX_DOMAINS[@]}" || filtered+=("$domain")
+    done
+    AI_APEX_DOMAINS=("${filtered[@]}")
+}
+
 load_custom_domains
+load_excluded_domains
+apply_excluded_domains
 
 # ── Cleanup trap — rolls back on unexpected failure ───────────────────────────
 _INSTALL_SUCCESS=false
@@ -137,6 +182,7 @@ gather_inputs() {
     detected_ip="${detected_ip//[[:space:]]/}"
 
     VPS_IP="${AIWAY_VPS_IP:-${VPS_IP:-}}"
+    TARGET_IP="${AIWAY_TARGET_IP:-${TARGET_IP:-}}"
     DOT_DOMAIN="${AIWAY_DOT_DOMAIN:-${DOT_DOMAIN:-}}"
     ACME_EMAIL="${AIWAY_ACME_EMAIL:-${ACME_EMAIL:-}}"
 
@@ -167,6 +213,25 @@ gather_inputs() {
         read -rp "  VPS public IP: " VPS_IP
     done
     print_ok "VPS IP: ${VPS_IP}"
+
+    echo ""
+    if [[ -z "$TARGET_IP" ]]; then
+        if [[ "${AIWAY_NONINTERACTIVE:-0}" == "1" ]]; then
+            TARGET_IP="$VPS_IP"
+        else
+            read -rp "  Proxy target IP [${VPS_IP}]: " TARGET_IP
+            TARGET_IP="${TARGET_IP:-$VPS_IP}"
+        fi
+    else
+        print_info "Using saved/configured proxy target IP: ${TARGET_IP}"
+    fi
+
+    while ! [[ "$TARGET_IP" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; do
+        print_error "Invalid proxy target IP: ${TARGET_IP:-<empty>}"
+        read -rp "  Proxy target IP [${VPS_IP}]: " TARGET_IP
+        TARGET_IP="${TARGET_IP:-$VPS_IP}"
+    done
+    print_ok "Proxy target IP: ${TARGET_IP}"
 
     # --- Optional domain for DoT / DoH ---
     echo ""
@@ -209,11 +274,13 @@ install_runtime_assets() {
 
     cat > "$AIWAY_INSTALLER_ENV" <<EOF
 AIWAY_VPS_IP="${VPS_IP}"
+AIWAY_TARGET_IP="${TARGET_IP}"
 AIWAY_DOT_DOMAIN="${DOT_DOMAIN}"
 AIWAY_ACME_EMAIL="${ACME_EMAIL}"
 EOF
 
     touch "$AIWAY_CUSTOM_DOMAINS_FILE"
+    touch "$AIWAY_EXCLUDED_DOMAINS_FILE"
     print_ok "Runtime assets installed in ${AIWAY_RUNTIME_DIR}"
     print_ok "CLI installed at ${AIWAY_CTL_TARGET}"
 }
@@ -285,14 +352,18 @@ install_angie() {
         apt-get install -y -q curl gnupg2 ca-certificates lsb-release apt-transport-https dnsutils
 
     run_quietly "Adding Angie GPG key" bash -c \
-        'curl -fsSL https://angie.software/angie/signing.asc | gpg --dearmor -o /usr/share/keyrings/angie.gpg'
+        'curl -fsSL -o /etc/apt/trusted.gpg.d/angie-signing.gpg https://angie.software/keys/angie-signing.gpg'
 
     local codename
     codename=$(lsb_release -sc 2>/dev/null || echo "${OS_CODENAME:-}")
     [[ -z "$codename" ]] && { print_error "Cannot determine OS codename."; exit 1; }
 
+    local version_id
+    version_id=$(source /etc/os-release && echo "${VERSION_ID}")
+    [[ -z "$version_id" ]] && { print_error "Cannot determine OS version ID."; exit 1; }
+
     run_quietly "Adding Angie apt repository" bash -c \
-        "echo 'deb [signed-by=/usr/share/keyrings/angie.gpg] https://deb.angie.software/angie/${OS_ID} ${codename} main' \
+        "echo 'deb https://download.angie.software/angie/${OS_ID}/${version_id} ${codename} main' \
          > /etc/apt/sources.list.d/angie.list"
 
     # apt-get update runs once here; main() does NOT call it again before install_angie
@@ -542,7 +613,7 @@ generate_blocky_config() {
 
     local dns_entries=""
     for domain in "${AI_APEX_DOMAINS[@]}"; do
-        dns_entries+="    ${domain}: ${VPS_IP}"$'\n'
+        dns_entries+="    ${domain}: ${TARGET_IP}"$'\n'
     done
 
     cat > "$BLOCKY_CONFIG" <<BLOCKYEOF
@@ -561,7 +632,7 @@ bootstrapDns:
   - 8.8.8.8
   - 1.1.1.1
 
-# AI domains → this VPS IP; all other domains resolve normally
+# AI domains → proxy target IP; all other domains resolve normally
 customDNS:
   mapping:
 ${dns_entries}
@@ -637,10 +708,10 @@ start_blocky() {
     if has_cmd dig; then
         local result
         result=$(dig +short +time=5 +tries=2 openai.com @127.0.0.1 2>/dev/null | head -1 || true)
-        if [[ "$result" == "$VPS_IP" ]]; then
-            print_ok "DNS self-test passed: openai.com → ${VPS_IP}"
+        if [[ "$result" == "$TARGET_IP" ]]; then
+            print_ok "DNS self-test passed: openai.com → ${TARGET_IP}"
         elif [[ -n "$result" ]]; then
-            print_warn "DNS self-test: openai.com → ${result} (expected ${VPS_IP}) — check ${BLOCKY_CONFIG}"
+            print_warn "DNS self-test: openai.com → ${result} (expected ${TARGET_IP}) — check ${BLOCKY_CONFIG}"
         else
             print_warn "DNS self-test inconclusive (empty response) — Blocky may still be initializing"
         fi

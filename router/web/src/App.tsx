@@ -89,11 +89,16 @@ function App() {
 	).length
 	const visibleCustomDomains = showAllDomains ? customDomains : customDomains.slice(0, 6)
 
-  const failsafe = draftConfig.routing.failsafeActive
+	const failsafe = draftConfig.routing.failsafeActive
 	const managedProfile = Boolean(activeProfile?.host?.trim())
 	const canManageVps = Boolean(managedProfile && activeStatus?.reachable)
 	const canManageDomains = Boolean(canManageVps)
 	const canMutateManagedVps = Boolean(canManageVps && activeStatus?.installState !== 'legacy')
+	const profileModeLabel = !managedProfile
+		? 'Только DNS'
+		: activeStatus?.installState === 'legacy'
+			? 'Legacy VPS'
+			: 'Управляемый VPS'
 
   return (
     <div className="shell">
@@ -131,6 +136,7 @@ function App() {
           </nav>
 
           <div className="topbar-actions">
+            <span className="status-pill muted">{profileModeLabel}</span>
             <span className={`status-pill ${activeStatus?.reachable ? 'ok' : 'bad'}`}>
               {managedProfile ? (activeStatus?.reachable ? 'SSH OK' : 'SSH ERR') : 'DNS'}
             </span>

@@ -56,7 +56,7 @@ a { color: inherit; text-decoration: none; }
 .app-footer-inner {
   max-width: var(--app-width);
   margin: 0 auto;
-  padding: 16px;
+  padding: 16px 16px calc(16px + env(safe-area-inset-bottom, 0px));
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -129,7 +129,7 @@ a { color: inherit; text-decoration: none; }
 
 .has-padding {
   padding-top: 28px;
-  padding-bottom: 28px;
+  padding-bottom: calc(28px + env(safe-area-inset-bottom, 0px));
 }
 
 .topbar {
@@ -139,6 +139,7 @@ a { color: inherit; text-decoration: none; }
   height: 56px;
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border);
+  padding-top: env(safe-area-inset-top, 0px);
 }
 
 .topbar-inner {
@@ -819,8 +820,8 @@ a { color: inherit; text-decoration: none; }
   }
 
   .topbar-inner {
-    padding-left: 12px;
-    padding-right: 12px;
+    padding-left: max(12px, env(safe-area-inset-left, 0px));
+    padding-right: max(12px, env(safe-area-inset-right, 0px));
   }
 
   .logo-mark {

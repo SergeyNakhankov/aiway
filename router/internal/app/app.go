@@ -113,8 +113,8 @@ func (a *App) handleOverview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	snapshot := a.store.Snapshot()
-	if address, sni, err := a.router.CurrentTLSState(); err == nil {
-		snapshot.RouterDNS = RouterDNSState{Active: address != "" || sni != "", Address: address, SNI: sni}
+	if state, err := a.router.RuntimeDNSState(); err == nil {
+		snapshot.RouterDNS = RouterDNSState{Active: state.Active, Address: state.Address, SNI: state.SNI}
 	}
 	writeJSON(w, http.StatusOK, snapshot)
 }
@@ -134,7 +134,7 @@ func (a *App) handleConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_ = a.store.AppendLog("info", "Конфигурация обновлена через веб-интерфейс")
-		writeJSON(w, http.StatusOK, next)
+		writeJSON(w, http.StatusOK, a.store.Config())
 	default:
 		methodNotAllowed(w)
 	}
@@ -194,9 +194,7 @@ func (a *App) handleToggleDNS(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	if payload.Enabled {
-		_ = a.store.SetFailsafe(false)
-	}
+	_ = a.store.SetFailsafe(false)
 	if message != "" {
 		_ = a.store.AppendLog("info", message)
 	}
@@ -256,7 +254,9 @@ func (a *App) handleDomainAction(w http.ResponseWriter, r *http.Request, add boo
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
-	_ = a.store.AppendLog("info", output)
+	if strings.TrimSpace(output) != "" {
+		_ = a.store.AppendLog("info", output)
+	}
 	status, _ := a.runActiveCheck("domain-update")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "output": output, "status": status})
 }
@@ -319,7 +319,9 @@ func (a *App) handleProfileAction(w http.ResponseWriter, r *http.Request, action
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
-	_ = a.store.AppendLog("info", output)
+	if strings.TrimSpace(output) != "" {
+		_ = a.store.AppendLog("info", output)
+	}
 	status, _ := a.checkProfile(profile, action)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "output": output, "status": status})
 }
@@ -392,11 +394,6 @@ func (a *App) checkProfile(profile Profile, reason string) (*ProfileStatus, erro
 		}
 		status.LastSuccessAt = nowRFC3339()
 		status.ConsecutiveFailures = 0
-		if status.DesiredDNSOn && !config.Routing.FailsafeActive {
-			if message, err := a.router.EnsureDNSState(address, sni, true); err == nil && message != "" {
-				_ = a.store.AppendLog("info", message)
-			}
-		}
 		_ = a.store.UpdateProfileStatus(*status)
 		return status, nil
 	}
@@ -443,21 +440,11 @@ func (a *App) checkProfile(profile Profile, reason string) (*ProfileStatus, erro
 	}
 
 	if a.store.Config().Routing.FailsafeActive && a.store.Config().Safety.AutoRecover {
-		if _, err := a.router.EnsureDNSState(address, sni, true); err == nil {
-			_ = a.store.AppendLog("info", "Маршрут aiway DNS снова привязан к основному WAN")
-		}
-		_ = a.store.SetFailsafe(false)
-		remoteStatus.EffectiveDNSOn = remoteStatus.DesiredDNSOn
-		_ = a.store.AppendLog("info", "Фейлсейф автоматически снят после успешной проверки")
-	}
-
-	if remoteStatus.DesiredDNSOn && !a.store.Config().Routing.FailsafeActive {
-		if message, err := a.router.EnsureDNSState(address, sni, true); err == nil {
-			if message != "" {
-				_ = a.store.AppendLog("info", message)
-			}
-		} else {
-			_ = a.store.AppendLog("warn", fmt.Sprintf("Не удалось применить DNS-маршрут на роутере: %v", err))
+		state, err := a.router.RuntimeDNSState()
+		if err == nil && state.Active {
+			_ = a.store.SetFailsafe(false)
+			remoteStatus.EffectiveDNSOn = remoteStatus.DesiredDNSOn
+			_ = a.store.AppendLog("info", "Фейлсейф автоматически снят после успешной проверки")
 		}
 	}
 
@@ -468,6 +455,9 @@ func (a *App) checkProfile(profile Profile, reason string) (*ProfileStatus, erro
 func (a *App) applyFailsafe(status *ProfileStatus) {
 	config := a.store.Config()
 	if !config.Safety.Enabled || !config.Safety.DisableDNSOnFailure {
+		return
+	}
+	if !config.Routing.DesiredDNSOn {
 		return
 	}
 	if status.ConsecutiveFailures < config.Safety.FailThreshold {

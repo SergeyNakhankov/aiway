@@ -165,7 +165,7 @@ function App() {
           <OverviewCard
             label="Домены"
             value={`${enabledDomainCount}`}
-            detail="сейчас идут через aiway"
+            detail={actualDnsOn ? 'сейчас идут через aiway' : 'подготовлены для маршрутизации'}
           />
         </section>
 
@@ -173,7 +173,7 @@ function App() {
           <>
             <SectionHeader
               title="Маршрутизация"
-              description="Один экран для включения AIWAY DNS, выбора сервисов и контроля пользовательских доменов."
+              description="Здесь включается AIWAY DNS, выбираются сервисы и управляются домены для проксирования."
             />
 
             <section className="content-grid">
@@ -182,7 +182,7 @@ function App() {
               <div>
                 <span className="panel-kicker">Главный контур</span>
                 <h2>AIWAY DNS</h2>
-                <p className="dns-hero-copy">Панель направляет DNS на внешний или управляемый aiway endpoint, но всегда закрепляет маршрут до него через основной интернет-канал роутера.</p>
+                <p className="dns-hero-copy">AIWAY DNS использует внешний endpoint, но сам путь до него всегда закрепляется через основной WAN роутера, а не через AWG.</p>
               </div>
                   <button
                     className={`btn dns-hero-button ${actualDnsOn && !failsafe ? 'btn-danger' : 'btn-primary'}`}
@@ -253,7 +253,7 @@ function App() {
                     <div className="panel-head compact">
                       <div>
                         <span className="panel-kicker">Кастомные домены</span>
-                        <h2>{activeStatus?.installState === 'legacy' ? 'Свои сервисы (legacy)' : 'Свои сервисы'}</h2>
+                        <h2>{activeStatus?.installState === 'legacy' ? 'Свои домены (legacy)' : 'Свои домены'}</h2>
                       </div>
                     </div>
                     <div className="inline-form">
@@ -269,7 +269,7 @@ function App() {
                         Добавить
                       </button>
                     </div>
-                    {activeStatus?.installState === 'legacy' && <p className="muted">Для этого VPS панель меняет существующие legacy-конфиги Angie и Blocky точечно, без полной переустановки.</p>}
+                    {activeStatus?.installState === 'legacy' && <p className="muted">Для этого VPS панель меняет текущие Angie/Blocky-конфиги точечно, без полной переустановки.</p>}
                     <div className="chips-stack">
                       {customDomains.length === 0 && <p className="muted">Кастомных доменов пока нет.</p>}
                       {customDomains.map((domain) => (
@@ -290,10 +290,10 @@ function App() {
                     <div className="panel-head compact">
                       <div>
                         <span className="panel-kicker">Кастомные домены</span>
-                        <h2>{canManageVps ? 'Только чтение' : 'Нужен доступный VPS'}</h2>
+                        <h2>{canManageVps ? 'Изменения недоступны' : 'Нужен доступный VPS'}</h2>
                       </div>
                     </div>
-                    <p className="muted">{canManageVps ? 'Этот VPS подключен в режиме бережного legacy-управления. Статус и проверки доступны, но изменение доменов скрыто, чтобы не ломать существующую ручную конфигурацию.' : 'Добавление и удаление собственных доменов работает только когда активный VPS-профиль доступен по SSH. Для DNS-only режима эта секция скрыта специально, чтобы не вводить в заблуждение.'}</p>
+                    <p className="muted">{canManageVps ? 'Профиль подключен в legacy-режиме. Статус и проверки доступны, но домены пока не стоит менять автоматически.' : 'Добавление и удаление доменов доступно только когда активный VPS-профиль доступен по SSH.'}</p>
                   </article>
                 )}
 
@@ -301,13 +301,13 @@ function App() {
                   <div className="panel-head compact">
                       <div>
                         <span className="panel-kicker">Быстрый статус</span>
-                        <h2>Что важно сейчас</h2>
+                        <h2>Текущее состояние</h2>
                     </div>
                   </div>
                   <div className="health-matrix compact-health">
                     <HealthRow label="VPS / endpoint" ok={Boolean(activeStatus?.reachable)} detail={activeStatus?.lastError || 'Доступен'} />
                     <HealthRow label="Фейлсейф" ok={!failsafe} detail={failsafe ? 'Ограничивает маршрут' : 'Не активирован'} />
-                    <HealthRow label="DNS режим" ok={actualDnsOn} detail={actualDnsOn ? 'Роутер реально использует aiway DNS' : 'Используется обычный DNS'} />
+                    <HealthRow label="DNS режим" ok={actualDnsOn} detail={actualDnsOn ? 'Роутер реально использует aiway DNS' : 'Роутер использует обычный DNS провайдера'} />
                   </div>
                 </article>
               </aside>

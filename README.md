@@ -12,8 +12,8 @@
 **Прозрачный SNI-прокси для AI-сервисов. Без VPN. Одной командой.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Ubuntu%2020.04+%20%7C%20Debian%2011+-blue)](https://github.com/yourname/aiway)
-[![Made in Russia](https://img.shields.io/badge/made%20in-Russia%20🇷🇺-red)](https://github.com/yourname/aiway)
+[![Platform](https://img.shields.io/badge/platform-Ubuntu%2020.04+%20%7C%20Debian%2011+-blue)](https://github.com/kirniy/aiway)
+[![Made in Russia](https://img.shields.io/badge/made%20in-Russia%20🇷🇺-red)](https://github.com/kirniy/aiway)
 [![Based on Habr](https://img.shields.io/badge/based%20on-habr.com%2F982070-65b4f3)](https://habr.com/ru/articles/982070/)
 
 </div>
@@ -27,7 +27,7 @@
 ## Быстрый старт
 
 ```bash
-git clone https://github.com/yourname/aiway
+git clone https://github.com/kirniy/aiway
 cd aiway
 sudo bash install.sh
 ```
@@ -38,18 +38,25 @@ sudo bash install.sh
 
 В репозитории теперь есть отдельный роутерный контур: `AIWAY Manager` для Keenetic / Entware.
 
-Важно: это **опциональная** часть проекта. Если вам нужен только простой путь "поставить `aiway` на VPS и прописать DNS" - можно спокойно игнорировать `router/` и пользоваться только `install.sh`.
+> Это **не обязательная** часть проекта. Если вам нужен только VPS с DNS/SNI-прокси, спокойно пользуйтесь `install.sh` и игнорируйте `router/`.
 
-- веб-панель на самом роутере
-- DNS-only режим: можно просто указать уже существующий `aiway` DNS endpoint без SSH-доступа к VPS
-- установка `aiway` на новые VPS через SSH прямо из GUI
-- `install / sync / reset / uninstall` без ручной возни в админке Keenetic
-- health-check, fail-safe, кастомные домены и LAN-friendly CLI/API
-- при `AIWAY OFF` роутер возвращается к DNS провайдера и закрепляет эти DNS через WAN/ISP, чтобы они не утекали в AWG default route
+### Выберите свой путь
 
-Текущая реализация рассчитана на Keenetic + Entware и уже собирается под несколько архитектур (`mips`, `mipsel`, `aarch64`).
+| Сценарий | Когда подходит | Что делать |
+|:--|:--|:--|
+| **VPS only** | Хотите просто вернуть ChatGPT / Claude / Gemini без лишнего UI | `sudo bash install.sh` на VPS и прописать DNS на устройствах |
+| **VPS + Keenetic dashboard** | Хотите GUI на роутере, health-check, DNS toggle, SSH-управление VPS | поставить `AIWAY Manager` на Keenetic |
 
-Установка на роутер одной командой из Entware shell:
+### Что дает `AIWAY Manager`
+
+- панель на самом роутере: `http://192.168.1.1:2233/routing`
+- `DNS-only` режим: можно использовать уже существующий `aiway` endpoint без SSH
+- `Managed VPS` режим: установка и управление VPS по SSH из GUI
+- health-check и fail-safe
+- кастомные домены и CLI/API для локальной сети
+- безопасный `AIWAY OFF`: при выключении роутер возвращается к DNS провайдера и закрепляет эти DNS через WAN/ISP, чтобы они не уходили в AWG default route
+
+### Установка на Keenetic одной командой
 
 ```sh
 wget -qO- https://raw.githubusercontent.com/kirniy/aiway/main/router/scripts/install.sh | sh
@@ -61,7 +68,9 @@ wget -qO- https://raw.githubusercontent.com/kirniy/aiway/main/router/scripts/ins
 curl -fsSL https://raw.githubusercontent.com/kirniy/aiway/main/router/scripts/install.sh | sh
 ```
 
-Подробности: [`docs/keenetic-dashboard.md`](docs/keenetic-dashboard.md) и подпроект [`router/`](router/).
+Поддерживаемые архитектуры Keenetic / Entware: `mips`, `mipsel`, `aarch64`.
+
+Подробности, режимы работы, поддержка legacy VPS и CLI/API: [`docs/keenetic-dashboard.md`](docs/keenetic-dashboard.md).
 
 ## VPS hardening
 
@@ -406,7 +415,7 @@ ss -tlnp | grep :443
 
 - 📧 [kirniy@me.com](mailto:kirniy@me.com)
 - 💬 [t.me/kirniy](https://t.me/kirniy)
-- 🐛 [GitHub Issues](https://github.com/yourname/aiway/issues)
+- 🐛 [GitHub Issues](https://github.com/kirniy/aiway/issues)
 
 ---
 

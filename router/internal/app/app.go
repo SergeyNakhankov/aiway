@@ -197,8 +197,9 @@ func (a *App) handleToggleDNS(w http.ResponseWriter, r *http.Request) {
 	_ = a.store.SetFailsafe(false)
 	if message != "" {
 		_ = a.store.AppendLog("info", message)
+	} else {
+		_ = a.store.AppendLog("info", fmt.Sprintf("Режим aiway DNS переключен: %v", payload.Enabled))
 	}
-	_ = a.store.AppendLog("info", fmt.Sprintf("Режим aiway DNS переключен: %v", payload.Enabled))
 	status, _ := a.runActiveCheck("toggle-dns")
 	writeJSON(w, http.StatusOK, map[string]any{"desiredDnsOn": payload.Enabled, "message": message, "status": status})
 }

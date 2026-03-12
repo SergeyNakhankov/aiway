@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -338,6 +339,16 @@ func (s *Store) ProfileStatus(id string) *ProfileStatus {
 func (s *Store) AppendLog(level string, message string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return nil
+	}
+	if len(s.logs) > 0 {
+		last := s.logs[len(s.logs)-1]
+		if last.Level == level && last.Message == message {
+			return nil
+		}
+	}
 	s.logs = append(s.logs, LogEntry{Timestamp: nowRFC3339(), Level: level, Message: message})
 	if len(s.logs) > 300 {
 		s.logs = append([]LogEntry(nil), s.logs[len(s.logs)-300:]...)

@@ -55,7 +55,7 @@ sudo bash install.sh
 - режим `Только DNS`: можно использовать уже существующий `aiway` endpoint без SSH
 - режим `Управляемый VPS`: установка и управление VPS по SSH из панели
 - проверки состояния и fail-safe
-- кастомные домены и CLI/API для локальной сети
+- кастомные домены и локальный CLI/API
 - безопасный `AIWAY OFF`: при выключении роутер возвращается к DNS провайдера и закрепляет эти DNS через WAN/ISP, чтобы они не уходили в AWG default route
 
 ### Установка на Keenetic одной командой
@@ -72,7 +72,7 @@ curl -fsSL https://raw.githubusercontent.com/kirniy/aiway/main/router/scripts/in
 
 Поддерживаемые архитектуры Keenetic / Entware: `mips`, `mipsel`, `aarch64`.
 
-Подробности, режимы работы, поддержка `Legacy VPS` и локальный CLI/API: [`docs/keenetic-dashboard.md`](docs/keenetic-dashboard.md).
+Подробности, режимы работы, поддержка режима `Legacy VPS` и локальный CLI/API: [`docs/keenetic-dashboard.md`](docs/keenetic-dashboard.md).
 
 ## VPS hardening
 
@@ -428,7 +428,7 @@ ss -tlnp | grep :443
 | Файл | Содержание |
 |:--|:--|
 | [как-это-работает.md](docs/как-это-работает.md) | Технический разбор SNI proxy и DNS, архитектура, ECH, QUIC |
-| [keenetic-dashboard.md](docs/keenetic-dashboard.md) | Панель на роутере, локальный CLI/API, Entware-пакет, управление VPS через SSH |
+| [keenetic-dashboard.md](docs/keenetic-dashboard.md) | Панель на роутере, локальный CLI/API, Entware-пакет и управление VPS через SSH |
 | [устройства.md](docs/устройства.md) | Настройка DNS на роутере, Android, iOS, macOS, Windows, Linux |
 | [диагностика.md](docs/диагностика.md) | Что делать если не работает, типичные ошибки, полезные команды |
 | [faq.md](docs/faq.md) | Ответы на частые вопросы |

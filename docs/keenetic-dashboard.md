@@ -65,7 +65,7 @@ http://192.168.1.1:2233/routing
 - умеет SSH key и password auth
 - принимает приватный SSH-ключ прямо из веб-интерфейса
 - показывает **реальное runtime-состояние DNS на роутере**, а не только желаемое состояние из UI
-- отдает удобный CLI/API для людей и агентов в локальной сети
+- отдает удобный локальный CLI/API для людей и агентов
 
 ## Самая важная часть: как ведет себя DNS
 
@@ -188,7 +188,7 @@ aiway-manager domains add perplexity.ai --endpoint http://192.168.1.1:2233
 | `router/cmd/aiway-manager` | Go-сервис и CLI |
 | `router/web` | фронтенд панели |
 | `router/webui/dist` | встроенная собранная веб-часть |
-| `router/package` | init-скрипты и lifecycle-файлы для Entware |
+| `router/package` | init-скрипты и служебные lifecycle-файлы для Entware |
 | `router/scripts/install.sh` | установщик одной командой |
 
 ## Сборка из исходников
@@ -285,8 +285,8 @@ make package
 
 Для этого и существует разделение на:
 
-- `DNS-only`
-- `Managed VPS`
+- `Только DNS`
+- `Управляемый VPS`
 - `Legacy VPS`
 
 Панель должна быть осторожной по умолчанию.

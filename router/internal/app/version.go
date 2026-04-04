@@ -1,3 +1,4 @@
 package app
 
-const Version = "0.1.4"
+// Version is injected at build time from router/VERSION.
+var Version = "dev"

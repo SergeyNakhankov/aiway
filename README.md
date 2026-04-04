@@ -70,7 +70,7 @@ wget -qO- https://raw.githubusercontent.com/kirniy/aiway/main/router/scripts/ins
 curl -fsSL https://raw.githubusercontent.com/kirniy/aiway/main/router/scripts/install.sh | sh
 ```
 
-Поддерживаемые архитектуры Keenetic / Entware: `mips`, `mipsel`, `aarch64`.
+Поддерживаемые архитектуры Keenetic / Entware: `aarch64`, `armv7`, `x64`, `mips`, `mipsel`.
 
 Подробности, режимы работы, поддержка режима `Legacy VPS` и локальный CLI/API: [`docs/keenetic-dashboard.md`](docs/keenetic-dashboard.md).
 

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log"
@@ -404,7 +405,7 @@ func (a *App) checkProfile(profile Profile, reason string) (*ProfileStatus, erro
 		status.LastError = "Заполни либо адрес VPS, либо DNS endpoint для отдельной установки aiway"
 		status.ConsecutiveFailures++
 		_ = a.store.UpdateProfileStatus(*status)
-		return status, fmt.Errorf(status.LastError)
+		return status, errors.New(status.LastError)
 	}
 
 	if err := quickTCPCheck(profile.Host, profile.Port); err != nil {

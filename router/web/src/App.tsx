@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useEffectEvent, useMemo, useState } from 'react'
 import { api } from './api'
 import type { Config, OverviewResponse, Profile, ProfileStatus, UpdateInfo } from './types'
 
@@ -25,19 +25,23 @@ function App() {
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
   const [showAllDomains, setShowAllDomains] = useState(false)
 
-  const refresh = async () => {
+  const loadOverview = async () => {
     try {
-      setError('')
       const payload = await api.overview()
       setOverview(payload)
       setDraftConfig(payload.config)
+      setError('')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось загрузить данные')
     }
   }
 
+  const refreshFromEffect = useEffectEvent(() => {
+    void loadOverview()
+  })
+
   useEffect(() => {
-    void refresh()
+    refreshFromEffect()
     const onPopState = () => setRoute(initialRoute())
     window.addEventListener('popstate', onPopState)
     return () => window.removeEventListener('popstate', onPopState)
@@ -61,7 +65,7 @@ function App() {
     try {
       setError('')
       await action()
-      await refresh()
+      await loadOverview()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Операция завершилась с ошибкой')
     }

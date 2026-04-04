@@ -168,6 +168,8 @@ aiway-manager domains add perplexity.ai --endpoint http://192.168.1.1:2233
 - `mips-3.4_kn`
 - `mipsel-3.4_kn`
 - `aarch64-3.10_kn`
+- `armv7-3.2_kn`
+- `x64-3.2_kn`
 
 Это покрывает несколько Keenetic-моделей с Entware.
 
@@ -201,6 +203,8 @@ make package
 На выходе:
 
 - `aiway-manager_<version>_aarch64-3.10-kn.ipk`
+- `aiway-manager_<version>_armv7-3.2-kn.ipk`
+- `aiway-manager_<version>_x64-3.2-kn.ipk`
 - `aiway-manager_<version>_mips-3.4-kn.ipk`
 - `aiway-manager_<version>_mipsel-3.4-kn.ipk`
 

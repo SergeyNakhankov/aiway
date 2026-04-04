@@ -354,6 +354,7 @@ func (c RouterController) routerAuth() (RouterAuth, error) {
 	if err := json.Unmarshal(payload, &auth); err != nil {
 		return RouterAuth{}, err
 	}
+	auth.BaseURL = strings.TrimRight(strings.TrimSpace(auth.BaseURL), "/")
 	if auth.BaseURL == "" {
 		auth.BaseURL = "http://192.168.1.1"
 	}
@@ -368,11 +369,16 @@ func (c RouterController) authSession() (RouterAuth, string, error) {
 	if err != nil {
 		return RouterAuth{}, "", err
 	}
-	resp, err := http.Get(auth.BaseURL + "/auth")
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(auth.BaseURL + "/auth")
 	if err != nil {
 		return RouterAuth{}, "", err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		return RouterAuth{}, "", fmt.Errorf("could not start Keenetic auth session: http %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
 	challenge := resp.Header.Get("X-NDM-Challenge")
 	realm := resp.Header.Get("X-NDM-Realm")
 	cookie := resp.Header.Get("Set-Cookie")
@@ -389,7 +395,7 @@ func (c RouterController) authSession() (RouterAuth, string, error) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Cookie", cookie)
-	resp2, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	resp2, err := client.Do(req)
 	if err != nil {
 		return RouterAuth{}, "", err
 	}
